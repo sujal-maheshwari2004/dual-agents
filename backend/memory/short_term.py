@@ -45,6 +45,10 @@ class ShortTermMemoryStore:
         with self._lock:
             return self._sessions.pop(session_id, None) is not None
 
+    def active_session_count(self) -> int:
+        with self._lock:
+            return len(self._sessions)
+
 
 @lru_cache
 def get_short_term_memory() -> ShortTermMemoryStore:

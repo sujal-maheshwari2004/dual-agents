@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from backend.config import get_settings
+from backend.observability import configure_observability
 from backend.routers import chat, health, memory
 
 
@@ -17,6 +18,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router)
     app.include_router(memory.router)
     app.include_router(health.router)
+    configure_observability(app)
 
     @app.get("/", tags=["meta"])
     async def root() -> dict[str, str]:

@@ -1,10 +1,71 @@
+# =============================================================
+# Dual Agents — root .gitignore
+# =============================================================
+
+# ── Secrets ──────────────────────────────────────────────────
 .env
-.venv/
+.env.local
+.env.*.local
+
+# ── Python ───────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
-.pytest_cache/
-.mypy_cache/
-node_modules/
+*.pyd
+.Python
+.venv/
+venv/
+env/
+.uv/
+uv.lock
+*.egg-info/
 dist/
 build/
+.eggs/
+*.egg
+pip-wheel-metadata/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# ── Node / Frontend ──────────────────────────────────────────
+node_modules/
+dist/
+frontend/dist/
+frontend/.vite/
+.vite/
+*.local
+
+# ── OS ───────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+Desktop.ini
+
+# ── IDEs ─────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Eval artifacts ───────────────────────────────────────────
+evals/results/raw_results.json
+evals/results/*.png
+evals/results/figures_summary.md
+
+# ── Deployment / infra ───────────────────────────────────────
+.terraform/
+*.tfstate
+*.tfstate.backup
+.firebase/
+firebase-debug.log
+.gcloudignore
+
+# ── Misc ─────────────────────────────────────────────────────
+*.bak
+*.tmp
