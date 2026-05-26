@@ -15,7 +15,13 @@ async def wikipedia(topic: str) -> str:
     url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(topic)}"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(url, headers={"accept": "application/json"})
+            response = await client.get(
+                url,
+                headers={
+                    "accept": "application/json",
+                    "User-Agent": "dual-agents/1.0 (https://bot-street.web.app)",
+                },
+            )
 
         if response.status_code == 404:
             return f"No Wikipedia page found for {topic}."

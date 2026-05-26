@@ -69,3 +69,28 @@ firebase-debug.log
 # ── Misc ─────────────────────────────────────────────────────
 *.bak
 *.tmp
+
+# Frontend env
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+
+# Key files (from secret creation)
+key.txt
+tmp.txt
+
+# Firebase hosting cache
+.firebase/
+
+
+# Frontend env
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+
+# Key files (from secret creation)
+key.txt
+tmp.txt
+
+# Firebase hosting cache
+.firebase/

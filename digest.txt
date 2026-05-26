@@ -5,6 +5,7 @@ Directory structure:
     ├── main.py
     ├── pyproject.toml
     ├── .env.example
+    ├── .firebaserc
     ├── .python-version
     ├── backend/
     │   ├── __init__.py
@@ -382,37 +383,10 @@ FILE: firebase.json
         "source": "**",
         "destination": "/index.html"
       }
-    ],
-    "headers": [
-      {
-        "source": "**/*.@(js|jsx|ts|tsx|css)",
-        "headers": [
-          {
-            "key": "Cache-Control",
-            "value": "public, max-age=31536000, immutable"
-          }
-        ]
-      },
-      {
-        "source": "**",
-        "headers": [
-          {
-            "key": "X-Frame-Options",
-            "value": "DENY"
-          },
-          {
-            "key": "X-Content-Type-Options",
-            "value": "nosniff"
-          },
-          {
-            "key": "Referrer-Policy",
-            "value": "strict-origin-when-cross-origin"
-          }
-        ]
-      }
     ]
   }
 }
+
 
 
 ================================================
@@ -502,6 +476,17 @@ APP_PORT=8000
 
 
 ================================================
+FILE: .firebaserc
+================================================
+{
+  "projects": {
+    "default": "bot-street"
+  }
+}
+
+
+
+================================================
 FILE: .python-version
 ================================================
 3.12
@@ -585,6 +570,7 @@ def get_settings() -> Settings:
 FILE: backend/main.py
 ================================================
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import get_settings
 from backend.observability import configure_observability
@@ -599,6 +585,14 @@ def create_app() -> FastAPI:
         version="0.1.0",
         docs_url="/docs",
         redoc_url="/redoc",
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["https://bot-street.web.app"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     app.include_router(chat.router)
@@ -618,7 +612,6 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-
 
 
 ================================================
@@ -2272,7 +2265,13 @@ async def wikipedia(topic: str) -> str:
     url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(topic)}"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(url, headers={"accept": "application/json"})
+            response = await client.get(
+                url,
+                headers={
+                    "accept": "application/json",
+                    "User-Agent": "dual-agents/1.0 (https://bot-street.web.app)",
+                },
+            )
 
         if response.status_code == 404:
             return f"No Wikipedia page found for {topic}."
@@ -2287,7 +2286,6 @@ async def wikipedia(topic: str) -> str:
         "url": payload.get("content_urls", {}).get("desktop", {}).get("page"),
     }
     return json.dumps(result, ensure_ascii=True)
-
 
 
 ================================================
@@ -2352,7 +2350,7 @@ steps:
       - --max-instances=3
       - --port=8000
       - --set-env-vars=ENVIRONMENT=production
-      - --update-secrets=OPENAI_API_KEY=openai-api-key:latest,HF_TOKEN=hf-token:latest,MONGODB_URI=mongodb-uri:latest,LANGCHAIN_API_KEY=langchain-api-key:latest,AZURE_TRANSLATOR_KEY=azure-translator-key:latest,AZURE_TRANSLATOR_REGION=azure-translator-region:latest
+      - --update-secrets=OPENAI_API_KEY=openai-api-key:latest,HF_TOKEN=hf-token:latest,MONGODB_URI=mongodb-uri:latest,LANGCHAIN_API_KEY=langchain-api-key:latest
     waitFor: ['push-backend']
 
   # â”€â”€ 4. Build Grafana image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -2704,8 +2702,7 @@ datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
-    # PROMETHEUS_URL is set as a Cloud Run env var, e.g. https://backend-xxxx.run.app
-    url: ${PROMETHEUS_URL}
+    url: https://dual-agents-backend-lmzcevoixa-uc.a.run.app
     isDefault: true
     editable: false
 

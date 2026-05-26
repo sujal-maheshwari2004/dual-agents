@@ -4,7 +4,6 @@ datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
-    # PROMETHEUS_URL is set as a Cloud Run env var, e.g. https://backend-xxxx.run.app
-    url: ${PROMETHEUS_URL}
+    url: https://dual-agents-backend-lmzcevoixa-uc.a.run.app
     isDefault: true
     editable: false
