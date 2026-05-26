@@ -48,6 +48,7 @@ Directory structure:
     │   ├── Dockerfile.prometheus
     │   ├── grafana/
     │   │   ├── dashboard.json
+    │   │   ├── entrypoint.sh
     │   │   ├── provisioning-dash.yaml
     │   │   └── provisioning-ds.yaml
     │   └── prometheus/
@@ -2147,27 +2148,16 @@ async def wikipedia(topic: str) -> str:
 ================================================
 FILE: deployment/cloudbuild.yaml
 ================================================
-# cloudbuild.yaml â€” monorepo CI/CD for GCP Cloud Run
-#
-# Substitutions (set in Cloud Build trigger or --substitutions flag):
-#   _REGION          e.g. us-central1
-#   _BACKEND_SERVICE e.g. dual-agents-backend
-#   _GRAFANA_SERVICE e.g. dual-agents-grafana
-#   _PROMETHEUS_SERVICE e.g. dual-agents-prometheus
-#   _MONGODB_URI     MongoDB Atlas connection string (use Secret Manager ref)
-#   _OPENAI_API_KEY  OpenAI key (use Secret Manager ref)
-#   _HF_TOKEN        Hugging Face token
-#   _PROMETHEUS_URL  Prometheus Cloud Run URL, used by Grafana datasource
-
 substitutions:
   _REGION: us-central1
   _BACKEND_SERVICE: dual-agents-backend
   _GRAFANA_SERVICE: dual-agents-grafana
   _PROMETHEUS_SERVICE: dual-agents-prometheus
+  _PROMETHEUS_URL: https://dual-agents-prometheus-lmzcevoixa-uc.a.run.app
 
 steps:
 
-  # â”€â”€ 1. Build backend image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # â”€â”€ 1. Build backend image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   - name: gcr.io/cloud-builders/docker
     id: build-backend
     args:
@@ -2175,13 +2165,11 @@ steps:
       - -f
       - deployment/Dockerfile.backend
       - -t
-      - gcr.io/$PROJECT_ID/$_BACKEND_SERVICE:$SHORT_SHA
-      - -t
       - gcr.io/$PROJECT_ID/$_BACKEND_SERVICE:latest
       - .
     waitFor: ['-']
 
-  # â”€â”€ 2. Push backend image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # â”€â”€ 2. Push backend image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   - name: gcr.io/cloud-builders/docker
     id: push-backend
     args:
@@ -2190,7 +2178,7 @@ steps:
       - gcr.io/$PROJECT_ID/$_BACKEND_SERVICE
     waitFor: ['build-backend']
 
-  # â”€â”€ 3. Deploy backend to Cloud Run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # â”€â”€ 3. Deploy backend to Cloud Run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     id: deploy-backend
     entrypoint: gcloud
@@ -2198,7 +2186,7 @@ steps:
       - run
       - deploy
       - $_BACKEND_SERVICE
-      - --image=gcr.io/$PROJECT_ID/$_BACKEND_SERVICE:$SHORT_SHA
+      - --image=gcr.io/$PROJECT_ID/$_BACKEND_SERVICE:latest
       - --region=$_REGION
       - --platform=managed
       - --allow-unauthenticated
@@ -2211,7 +2199,7 @@ steps:
       - --update-secrets=OPENAI_API_KEY=openai-api-key:latest,HF_TOKEN=hf-token:latest,MONGODB_URI=mongodb-uri:latest,LANGCHAIN_API_KEY=langchain-api-key:latest
     waitFor: ['push-backend']
 
-  # â”€â”€ 4. Build Prometheus image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # â”€â”€ 4. Build Prometheus image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   - name: gcr.io/cloud-builders/docker
     id: build-prometheus
     args:
@@ -2219,13 +2207,11 @@ steps:
       - -f
       - deployment/Dockerfile.prometheus
       - -t
-      - gcr.io/$PROJECT_ID/$_PROMETHEUS_SERVICE:$SHORT_SHA
-      - -t
       - gcr.io/$PROJECT_ID/$_PROMETHEUS_SERVICE:latest
       - deployment/
     waitFor: ['-']
 
-  # â”€â”€ 5. Push Prometheus image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # â”€â”€ 5. Push Prometheus image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   - name: gcr.io/cloud-builders/docker
     id: push-prometheus
     args:
@@ -2234,7 +2220,7 @@ steps:
       - gcr.io/$PROJECT_ID/$_PROMETHEUS_SERVICE
     waitFor: ['build-prometheus']
 
-  # â”€â”€ 6. Deploy Prometheus to Cloud Run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # â”€â”€ 6. Deploy Prometheus to Cloud Run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     id: deploy-prometheus
     entrypoint: gcloud
@@ -2242,7 +2228,7 @@ steps:
       - run
       - deploy
       - $_PROMETHEUS_SERVICE
-      - --image=gcr.io/$PROJECT_ID/$_PROMETHEUS_SERVICE:$SHORT_SHA
+      - --image=gcr.io/$PROJECT_ID/$_PROMETHEUS_SERVICE:latest
       - --region=$_REGION
       - --platform=managed
       - --allow-unauthenticated
@@ -2253,7 +2239,7 @@ steps:
       - --port=9090
     waitFor: ['push-prometheus']
 
-  # â”€â”€ 7. Build Grafana image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # â”€â”€ 7. Build Grafana image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   - name: gcr.io/cloud-builders/docker
     id: build-grafana
     args:
@@ -2261,13 +2247,11 @@ steps:
       - -f
       - deployment/Dockerfile.grafana
       - -t
-      - gcr.io/$PROJECT_ID/$_GRAFANA_SERVICE:$SHORT_SHA
-      - -t
       - gcr.io/$PROJECT_ID/$_GRAFANA_SERVICE:latest
       - deployment/
     waitFor: ['-']
 
-  # â”€â”€ 8. Push Grafana image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # â”€â”€ 8. Push Grafana image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   - name: gcr.io/cloud-builders/docker
     id: push-grafana
     args:
@@ -2276,8 +2260,7 @@ steps:
       - gcr.io/$PROJECT_ID/$_GRAFANA_SERVICE
     waitFor: ['build-grafana']
 
-  # â”€â”€ 9. Deploy Grafana to Cloud Run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  #    Waits for Prometheus to be deployed so _PROMETHEUS_URL is resolvable.
+  # â”€â”€ 9. Deploy Grafana to Cloud Run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     id: deploy-grafana
     entrypoint: gcloud
@@ -2285,7 +2268,7 @@ steps:
       - run
       - deploy
       - $_GRAFANA_SERVICE
-      - --image=gcr.io/$PROJECT_ID/$_GRAFANA_SERVICE:$SHORT_SHA
+      - --image=gcr.io/$PROJECT_ID/$_GRAFANA_SERVICE:latest
       - --region=$_REGION
       - --platform=managed
       - --allow-unauthenticated
@@ -2298,11 +2281,8 @@ steps:
     waitFor: ['push-grafana', 'deploy-prometheus']
 
 images:
-  - gcr.io/$PROJECT_ID/$_BACKEND_SERVICE:$SHORT_SHA
   - gcr.io/$PROJECT_ID/$_BACKEND_SERVICE:latest
-  - gcr.io/$PROJECT_ID/$_PROMETHEUS_SERVICE:$SHORT_SHA
   - gcr.io/$PROJECT_ID/$_PROMETHEUS_SERVICE:latest
-  - gcr.io/$PROJECT_ID/$_GRAFANA_SERVICE:$SHORT_SHA
   - gcr.io/$PROJECT_ID/$_GRAFANA_SERVICE:latest
 
 options:
@@ -2358,30 +2338,27 @@ CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT} --worke
 ================================================
 FILE: deployment/Dockerfile.grafana
 ================================================
-# Stateless Grafana â€” config baked in, no persistent volume needed.
-# Dashboard JSON is provisioned at build time via grafana/dashboard.json.
 FROM grafana/grafana:11.2.0
 
-# Disable auth for public demo; swap to GF_AUTH_ANONYMOUS_ENABLED=false
-# and add GF_SECURITY_ADMIN_* vars for a private deployment.
 ENV GF_AUTH_ANONYMOUS_ENABLED=true \
     GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer \
     GF_SERVER_ROOT_URL=/ \
     GF_SERVER_SERVE_FROM_SUB_PATH=false \
-    GF_LOG_LEVEL=warn
-
-# Prometheus datasource â€” URL is injected at runtime via Cloud Run env var
-# PROMETHEUS_URL=http://<backend-service>/metrics
-# We write it as a provisioning file using an entrypoint override below.
+    GF_LOG_LEVEL=warn \
+    GF_SERVER_HTTP_PORT=3000
 
 COPY grafana/dashboard.json          /etc/grafana/provisioning/dashboards/dual-agents.json
 COPY grafana/provisioning-ds.yaml    /etc/grafana/provisioning/datasources/prometheus.yaml
 COPY grafana/provisioning-dash.yaml  /etc/grafana/provisioning/dashboards/default.yaml
+COPY grafana/entrypoint.sh           /entrypoint.sh
 
+USER root
+RUN chmod +x /entrypoint.sh
+
+USER grafana
 EXPOSE 3000
 
-# Grafana reads PORT from GF_SERVER_HTTP_PORT
-ENV GF_SERVER_HTTP_PORT=3000
+ENTRYPOINT ["/entrypoint.sh"]
 
 
 ================================================
@@ -2592,6 +2569,14 @@ FILE: deployment/grafana/dashboard.json
 
 
 ================================================
+FILE: deployment/grafana/entrypoint.sh
+================================================
+#!/bin/sh
+sed -i "s|PROMETHEUS_URL_PLACEHOLDER|${PROMETHEUS_URL}|g" /etc/grafana/provisioning/datasources/prometheus.yaml
+exec /run.sh
+
+
+================================================
 FILE: deployment/grafana/provisioning-dash.yaml
 ================================================
 apiVersion: 1
@@ -2615,7 +2600,7 @@ datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
-    url: https://dual-agents-backend-lmzcevoixa-uc.a.run.app
+    url: PROMETHEUS_URL_PLACEHOLDER
     isDefault: true
     editable: false
 
@@ -2633,6 +2618,9 @@ scrape_configs:
           - dual-agents-backend-lmzcevoixa-uc.a.run.app
     metrics_path: /metrics
     scheme: https
+    tls_config:
+      insecure_skip_verify: false   # Cloud Run has valid certs, keep this false
+    honor_labels: true
 
 
 ================================================
