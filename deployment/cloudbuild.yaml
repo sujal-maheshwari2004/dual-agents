@@ -57,7 +57,7 @@ steps:
       - --max-instances=3
       - --port=8000
       - --set-env-vars=ENVIRONMENT=production
-      - --update-secrets=OPENAI_API_KEY=openai-api-key:latest,HF_TOKEN=hf-token:latest,MONGODB_URI=mongodb-uri:latest,LANGCHAIN_API_KEY=langchain-api-key:latest,AZURE_TRANSLATOR_KEY=azure-translator-key:latest,AZURE_TRANSLATOR_REGION=azure-translator-region:latest
+      - --update-secrets=OPENAI_API_KEY=openai-api-key:latest,HF_TOKEN=hf-token:latest,MONGODB_URI=mongodb-uri:latest,LANGCHAIN_API_KEY=langchain-api-key:latest
     waitFor: ['push-backend']
 
   # ── 4. Build Grafana image ───────────────────────────────────
