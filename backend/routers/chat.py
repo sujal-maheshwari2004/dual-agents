@@ -1,6 +1,9 @@
+from time import perf_counter
+
 from fastapi import APIRouter
 
-from backend.memory import get_short_term_memory
+from backend.assistants import AssistantRunInput, get_assistant
+from backend.memory import extract_memory_candidates, get_long_term_memory, get_short_term_memory
 from backend.schemas import ChatRequest, ChatResponse
 
 router = APIRouter(tags=["chat"])
@@ -8,26 +11,36 @@ router = APIRouter(tags=["chat"])
 
 @router.post("/chat", response_model=ChatResponse)
 async def create_chat_completion(payload: ChatRequest) -> ChatResponse:
-    memory = get_short_term_memory()
-    prior_turns = memory.get_history(payload.session_id)
+    short_term_memory = get_short_term_memory()
+    long_term_memory = get_long_term_memory()
+    prior_turns = short_term_memory.get_history(payload.session_id)
+    remembered_context = await long_term_memory.get_recent(payload.user_id)
+    assistant = get_assistant(payload.model)
 
-    # Stubbed response until assistant orchestration is wired in.
-    reply = (
-        f"{payload.model.value} assistant is bootstrapped. "
-        f"I can see {len(prior_turns)} prior turn(s) in this session, "
-        "and full orchestration will be added in the next slice."
+    started_at = perf_counter()
+    result = await assistant.generate_reply(
+        AssistantRunInput(
+            session_id=payload.session_id,
+            user_id=payload.user_id,
+            message=payload.message,
+            history=prior_turns,
+            long_term_memory=remembered_context,
+        )
     )
+    latency_ms = int((perf_counter() - started_at) * 1000)
 
-    memory.append_turn(
+    short_term_memory.append_turn(
         session_id=payload.session_id,
         user_message=payload.message,
-        assistant_reply=reply,
+        assistant_reply=result.reply,
     )
+    for key, value in extract_memory_candidates(payload.message):
+        await long_term_memory.save_memory(payload.user_id, key, value)
 
     return ChatResponse(
-        reply=reply,
-        tool_calls=[],
-        model=payload.model.value,
-        latency_ms=0,
-        tokens_used=0,
+        reply=result.reply,
+        tool_calls=result.tool_calls,
+        model=result.model_name,
+        latency_ms=latency_ms,
+        tokens_used=result.tokens_used,
     )

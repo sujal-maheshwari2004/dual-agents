@@ -13,8 +13,22 @@ class Settings(BaseSettings):
     app_port: int = Field(default=8000, validation_alias="APP_PORT")
 
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
+    openai_model: str = Field(default="gpt-4.1", validation_alias="OPENAI_MODEL")
     hf_token: str | None = Field(default=None, validation_alias="HF_TOKEN")
+    hf_model_id: str = Field(
+        default="Qwen/Qwen2.5-0.5B-Instruct",
+        validation_alias="HF_MODEL_ID",
+    )
+    hf_base_url: str = Field(
+        default="https://router.huggingface.co/v1",
+        validation_alias="HF_BASE_URL",
+    )
     mongodb_uri: str | None = Field(default=None, validation_alias="MONGODB_URI")
+    mongodb_database: str = Field(default="dual_agents", validation_alias="MONGODB_DATABASE")
+    mongodb_memory_collection: str = Field(
+        default="memories",
+        validation_alias="MONGODB_MEMORY_COLLECTION",
+    )
     azure_translator_key: str | None = Field(
         default=None,
         validation_alias="AZURE_TRANSLATOR_KEY",

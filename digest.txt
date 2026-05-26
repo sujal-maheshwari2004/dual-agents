@@ -3,7 +3,38 @@ Directory structure:
     ├── README.md
     ├── main.py
     ├── pyproject.toml
-    └── .python-version
+    ├── .env.example
+    ├── .python-version
+    └── backend/
+        ├── __init__.py
+        ├── config.py
+        ├── main.py
+        ├── schemas.py
+        ├── assistants/
+        │   ├── __init__.py
+        │   ├── base.py
+        │   ├── frontier.py
+        │   └── oss.py
+        ├── guardrails/
+        │   └── __init__.py
+        ├── memory/
+        │   ├── __init__.py
+        │   ├── long_term.py
+        │   └── short_term.py
+        ├── observability/
+        │   └── __init__.py
+        ├── routers/
+        │   ├── __init__.py
+        │   ├── chat.py
+        │   ├── health.py
+        │   └── memory.py
+        └── tools/
+            ├── __init__.py
+            ├── calculator.py
+            ├── registry.py
+            ├── search.py
+            ├── translation.py
+            └── wikipedia.py
 
 ================================================
 FILE: README.md
@@ -291,8 +322,19 @@ Each response gets a structured JSON score. Aggregated into per-category and ove
 ================================================
 FILE: main.py
 ================================================
-def main():
-    print("Hello from dual-agents!")
+import uvicorn
+
+from backend.config import get_settings
+
+
+def main() -> None:
+    settings = get_settings()
+    uvicorn.run(
+        "backend.main:app",
+        host=settings.app_host,
+        port=settings.app_port,
+        reload=settings.is_local,
+    )
 
 
 if __name__ == "__main__":
@@ -306,10 +348,57 @@ FILE: pyproject.toml
 [project]
 name = "dual-agents"
 version = "0.1.0"
-description = "Add your description here"
+description = "Dual AI personal assistant backend and evaluation suite"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "fastapi>=0.115.0,<1.0.0",
+    "httpx>=0.28.0,<1.0.0",
+    "langchain>=1.3.1",
+    "langchain-core>=0.3.0,<2.0.0",
+    "langchain-openai>=0.3.0,<2.0.0",
+    "langgraph>=1.0.0,<2.0.0",
+    "langsmith>=0.1.139,<1.0.0",
+    "motor>=3.6.0,<4.0.0",
+    "openai>=1.54.0,<2.0.0",
+    "prometheus-fastapi-instrumentator>=7.0.0,<8.0.0",
+    "pydantic-settings>=2.6.0,<3.0.0",
+    "python-dotenv>=1.0.1,<2.0.0",
+    "uvicorn[standard]>=0.32.0,<1.0.0",
+]
+
+
+
+================================================
+FILE: .env.example
+================================================
+# OpenAI
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4.1
+
+# Hugging Face
+HF_TOKEN=
+HF_MODEL_ID=Qwen/Qwen2.5-0.5B-Instruct
+HF_BASE_URL=https://router.huggingface.co/v1
+
+# MongoDB Atlas
+MONGODB_URI=
+MONGODB_DATABASE=dual_agents
+MONGODB_MEMORY_COLLECTION=memories
+
+# Microsoft Translator
+AZURE_TRANSLATOR_KEY=
+AZURE_TRANSLATOR_REGION=
+
+# LangSmith
+LANGCHAIN_API_KEY=
+LANGCHAIN_PROJECT=dual-agents
+
+# App
+ENVIRONMENT=local
+APP_NAME=Dual AI Personal Assistant
+APP_HOST=127.0.0.1
+APP_PORT=8000
 
 
 
@@ -317,5 +406,1122 @@ dependencies = []
 FILE: .python-version
 ================================================
 3.12
+
+
+
+================================================
+FILE: backend/__init__.py
+================================================
+"""Backend package for the dual assistant project."""
+
+
+
+
+================================================
+FILE: backend/config.py
+================================================
+from functools import lru_cache
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Application settings loaded from environment variables or .env."""
+
+    app_name: str = Field(default="Dual AI Personal Assistant", validation_alias="APP_NAME")
+    environment: str = Field(default="local", validation_alias="ENVIRONMENT")
+    app_host: str = Field(default="127.0.0.1", validation_alias="APP_HOST")
+    app_port: int = Field(default=8000, validation_alias="APP_PORT")
+
+    openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
+    openai_model: str = Field(default="gpt-4.1", validation_alias="OPENAI_MODEL")
+    hf_token: str | None = Field(default=None, validation_alias="HF_TOKEN")
+    hf_model_id: str = Field(
+        default="Qwen/Qwen2.5-0.5B-Instruct",
+        validation_alias="HF_MODEL_ID",
+    )
+    hf_base_url: str = Field(
+        default="https://router.huggingface.co/v1",
+        validation_alias="HF_BASE_URL",
+    )
+    mongodb_uri: str | None = Field(default=None, validation_alias="MONGODB_URI")
+    mongodb_database: str = Field(default="dual_agents", validation_alias="MONGODB_DATABASE")
+    mongodb_memory_collection: str = Field(
+        default="memories",
+        validation_alias="MONGODB_MEMORY_COLLECTION",
+    )
+    azure_translator_key: str | None = Field(
+        default=None,
+        validation_alias="AZURE_TRANSLATOR_KEY",
+    )
+    azure_translator_region: str | None = Field(
+        default=None,
+        validation_alias="AZURE_TRANSLATOR_REGION",
+    )
+    langchain_api_key: str | None = Field(default=None, validation_alias="LANGCHAIN_API_KEY")
+    langchain_project: str = Field(
+        default="dual-agents",
+        validation_alias="LANGCHAIN_PROJECT",
+    )
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @property
+    def is_local(self) -> bool:
+        return self.environment.lower() == "local"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+
+================================================
+FILE: backend/main.py
+================================================
+from fastapi import FastAPI
+
+from backend.config import get_settings
+from backend.routers import chat, health, memory
+
+
+def create_app() -> FastAPI:
+    settings = get_settings()
+
+    app = FastAPI(
+        title=settings.app_name,
+        version="0.1.0",
+        docs_url="/docs",
+        redoc_url="/redoc",
+    )
+
+    app.include_router(chat.router)
+    app.include_router(memory.router)
+    app.include_router(health.router)
+
+    @app.get("/", tags=["meta"])
+    async def root() -> dict[str, str]:
+        return {
+            "name": settings.app_name,
+            "environment": settings.environment,
+            "status": "bootstrapped",
+        }
+
+    return app
+
+
+app = create_app()
+
+
+
+================================================
+FILE: backend/schemas.py
+================================================
+from enum import StrEnum
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class AssistantModel(StrEnum):
+    OSS = "oss"
+    FRONTIER = "frontier"
+
+
+class ToolCall(BaseModel):
+    name: str
+    input: dict[str, Any] = Field(default_factory=dict)
+    output: Any | None = None
+
+
+class ChatRequest(BaseModel):
+    session_id: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    model: AssistantModel
+    user_id: str = Field(min_length=1)
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    model: str
+    latency_ms: int = Field(ge=0)
+    tokens_used: int = Field(ge=0)
+
+
+class MemoryRecord(BaseModel):
+    key: str
+    value: str
+    source: str = "long_term"
+
+
+class MemoryResponse(BaseModel):
+    user_id: str
+    memories: list[MemoryRecord] = Field(default_factory=list)
+
+
+class MemoryDeleteResponse(BaseModel):
+    user_id: str
+    cleared: bool
+
+
+class HealthResponse(BaseModel):
+    status: str
+    environment: str
+    uptime_seconds: float = Field(ge=0)
+    model_availability: dict[str, bool]
+
+
+
+================================================
+FILE: backend/assistants/__init__.py
+================================================
+"""Assistant implementations."""
+
+from functools import lru_cache
+
+from backend.assistants.base import AssistantRunInput, AssistantRunResult, BaseAssistant
+from backend.assistants.frontier import FrontierAssistant
+from backend.assistants.oss import OssAssistant
+from backend.config import get_settings
+from backend.schemas import AssistantModel
+
+
+@lru_cache
+def _assistant_registry() -> dict[AssistantModel, BaseAssistant]:
+    settings = get_settings()
+    return {
+        AssistantModel.FRONTIER: FrontierAssistant(settings),
+        AssistantModel.OSS: OssAssistant(settings),
+    }
+
+
+def get_assistant(model: AssistantModel) -> BaseAssistant:
+    return _assistant_registry()[model]
+
+
+__all__ = [
+    "AssistantRunInput",
+    "AssistantRunResult",
+    "BaseAssistant",
+    "FrontierAssistant",
+    "OssAssistant",
+    "get_assistant",
+]
+
+
+
+================================================
+FILE: backend/assistants/base.py
+================================================
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any, Sequence
+
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+
+from backend.memory import ConversationTurn
+from backend.schemas import MemoryRecord, ToolCall
+
+
+DEFAULT_SYSTEM_PROMPT = (
+    "You are a helpful personal assistant. "
+    "Use the provided conversation history when it is relevant, "
+    "answer honestly, and avoid inventing facts."
+)
+
+
+@dataclass(slots=True)
+class AssistantRunInput:
+    session_id: str
+    user_id: str
+    message: str
+    history: Sequence[ConversationTurn]
+    long_term_memory: Sequence[MemoryRecord] = ()
+
+
+@dataclass(slots=True)
+class AssistantRunResult:
+    reply: str
+    tool_calls: list[ToolCall]
+    tokens_used: int
+    model_name: str
+
+
+class BaseAssistant(ABC):
+    def __init__(self, model_name: str, system_prompt: str = DEFAULT_SYSTEM_PROMPT) -> None:
+        self.model_name = model_name
+        self.system_prompt = system_prompt
+
+    def build_messages(self, request: AssistantRunInput) -> list[BaseMessage]:
+        system_prompt = self.system_prompt
+        if request.long_term_memory:
+            memory_lines = [
+                f"- {memory.key}: {memory.value}" for memory in request.long_term_memory
+            ]
+            system_prompt = (
+                f"{system_prompt}\n\nRelevant long-term user memory:\n"
+                + "\n".join(memory_lines)
+            )
+
+        messages: list[BaseMessage] = [SystemMessage(content=system_prompt)]
+        for turn in request.history:
+            messages.append(HumanMessage(content=turn.user_message))
+            messages.append(AIMessage(content=turn.assistant_reply))
+        messages.append(HumanMessage(content=request.message))
+        return messages
+
+    @staticmethod
+    def coerce_content(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    text = item.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+            return "\n".join(part for part in parts if part).strip()
+        return str(content)
+
+    @abstractmethod
+    async def generate_reply(self, request: AssistantRunInput) -> AssistantRunResult:
+        raise NotImplementedError
+
+
+
+================================================
+FILE: backend/assistants/frontier.py
+================================================
+import operator
+from typing import Annotated, Any
+
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_openai import ChatOpenAI
+from langgraph.graph import START, MessagesState, StateGraph
+from langgraph.prebuilt import ToolNode, tools_condition
+
+from backend.assistants.base import AssistantRunInput, AssistantRunResult, BaseAssistant
+from backend.config import Settings
+from backend.schemas import ToolCall
+from backend.tools import get_langchain_tools
+
+
+class FrontierAssistantState(MessagesState):
+    reply: str
+    tool_calls: list[ToolCall]
+    tokens_used: Annotated[int, operator.add]
+
+
+class FrontierAssistant(BaseAssistant):
+    def __init__(self, settings: Settings) -> None:
+        super().__init__(model_name=settings.openai_model)
+        self._settings = settings
+        self._tools = get_langchain_tools()
+        self._llm = (
+            ChatOpenAI(
+                model=settings.openai_model,
+                api_key=settings.openai_api_key,
+                temperature=0,
+            )
+            if settings.openai_api_key
+            else None
+        )
+        self._llm_with_tools = self._llm.bind_tools(self._tools) if self._llm else None
+        self._graph = self._build_graph()
+
+    def _build_graph(self):
+        graph = StateGraph(FrontierAssistantState)
+        graph.add_node("call_model", self._call_model)
+        graph.add_node("tools", ToolNode(self._tools))
+        graph.add_edge(START, "call_model")
+        graph.add_conditional_edges("call_model", tools_condition)
+        graph.add_edge("tools", "call_model")
+        return graph.compile()
+
+    async def _call_model(self, state: FrontierAssistantState) -> dict[str, Any]:
+        if self._llm_with_tools is None:
+            reply = (
+                "Frontier assistant wiring now runs through LangGraph, "
+                "but OPENAI_API_KEY is not configured yet."
+            )
+            return {
+                "messages": [AIMessage(content=reply)],
+                "reply": reply,
+                "tool_calls": [],
+                "tokens_used": 0,
+            }
+
+        response = await self._llm_with_tools.ainvoke(state["messages"])
+        usage_metadata = getattr(response, "usage_metadata", {}) or {}
+        return {
+            "messages": [response],
+            "reply": self.coerce_content(response.content),
+            "tool_calls": [],
+            "tokens_used": int(usage_metadata.get("total_tokens", 0) or 0),
+        }
+
+    def _extract_tool_calls(self, messages: list[BaseMessage]) -> list[ToolCall]:
+        tool_outputs: dict[str, Any] = {}
+        for message in messages:
+            if isinstance(message, ToolMessage):
+                tool_outputs[message.tool_call_id] = self.coerce_content(message.content)
+
+        calls: list[ToolCall] = []
+        for message in messages:
+            if not isinstance(message, AIMessage):
+                continue
+
+            for tool_call in getattr(message, "tool_calls", []) or []:
+                tool_call_id = tool_call.get("id", "")
+                calls.append(
+                    ToolCall(
+                        name=tool_call.get("name", "unknown_tool"),
+                        input=tool_call.get("args", {}) or {},
+                        output=tool_outputs.get(tool_call_id),
+                    )
+                )
+        return calls
+
+    async def generate_reply(self, request: AssistantRunInput) -> AssistantRunResult:
+        state = await self._graph.ainvoke(
+            {
+                "messages": self.build_messages(request),
+                "reply": "",
+                "tool_calls": [],
+                "tokens_used": 0,
+            }
+        )
+        return AssistantRunResult(
+            reply=state["reply"],
+            tool_calls=self._extract_tool_calls(state["messages"]),
+            tokens_used=state["tokens_used"],
+            model_name=self.model_name,
+        )
+
+
+
+================================================
+FILE: backend/assistants/oss.py
+================================================
+from typing import Any
+
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langgraph.graph import END, START, MessagesState, StateGraph
+from openai import AsyncOpenAI, OpenAIError
+
+from backend.assistants.base import AssistantRunInput, AssistantRunResult, BaseAssistant
+from backend.config import Settings
+
+
+class OssAssistantState(MessagesState):
+    reply: str
+    tokens_used: int
+
+
+class OssAssistant(BaseAssistant):
+    def __init__(self, settings: Settings) -> None:
+        super().__init__(model_name=settings.hf_model_id)
+        self._settings = settings
+        self._client = (
+            AsyncOpenAI(
+                api_key=settings.hf_token,
+                base_url=settings.hf_base_url,
+            )
+            if settings.hf_token
+            else None
+        )
+        self._graph = self._build_graph()
+
+    def _build_graph(self):
+        graph = StateGraph(OssAssistantState)
+        graph.add_node("draft_response", self._draft_response)
+        graph.add_edge(START, "draft_response")
+        graph.add_edge("draft_response", END)
+        return graph.compile()
+
+    async def _draft_response(self, state: OssAssistantState) -> dict[str, Any]:
+        if self._client is None:
+            reply = (
+                "OSS assistant wiring now runs through LangGraph, "
+                "but HF_TOKEN is not configured yet."
+            )
+            return {
+                "messages": [AIMessage(content=reply)],
+                "reply": reply,
+                "tokens_used": 0,
+            }
+
+        try:
+            completion = await self._client.chat.completions.create(
+                model=self._settings.hf_model_id,
+                messages=self._to_openai_messages(state["messages"]),
+                temperature=0.2,
+                max_tokens=512,
+            )
+        except OpenAIError as exc:
+            reply = f"OSS assistant request failed: {exc}"
+            return {
+                "messages": [AIMessage(content=reply)],
+                "reply": reply,
+                "tokens_used": 0,
+            }
+
+        message = completion.choices[0].message
+        reply = message.content or ""
+        usage = completion.usage
+        return {
+            "messages": [AIMessage(content=reply)],
+            "reply": reply,
+            "tokens_used": int(usage.total_tokens if usage else 0),
+        }
+
+    def _to_openai_messages(self, messages: list[BaseMessage]) -> list[dict[str, str]]:
+        converted: list[dict[str, str]] = []
+        for message in messages:
+            if isinstance(message, SystemMessage):
+                role = "system"
+            elif isinstance(message, HumanMessage):
+                role = "user"
+            elif isinstance(message, AIMessage):
+                role = "assistant"
+            else:
+                continue
+
+            content = self.coerce_content(message.content)
+            if content:
+                converted.append({"role": role, "content": content})
+        return converted
+
+    async def generate_reply(self, request: AssistantRunInput) -> AssistantRunResult:
+        state = await self._graph.ainvoke(
+            {
+                "messages": self.build_messages(request),
+                "reply": "",
+                "tokens_used": 0,
+            }
+        )
+        return AssistantRunResult(
+            reply=state["reply"],
+            tool_calls=[],
+            tokens_used=state["tokens_used"],
+            model_name=self.model_name,
+        )
+
+
+
+================================================
+FILE: backend/guardrails/__init__.py
+================================================
+"""Input and output guardrail modules."""
+
+
+
+
+================================================
+FILE: backend/memory/__init__.py
+================================================
+"""Short-term and long-term memory stores."""
+
+from backend.memory.short_term import (
+    ConversationTurn,
+    ShortTermMemoryStore,
+    get_short_term_memory,
+)
+from backend.memory.long_term import (
+    LongTermMemoryStore,
+    extract_memory_candidates,
+    get_long_term_memory,
+)
+
+__all__ = [
+    "ConversationTurn",
+    "LongTermMemoryStore",
+    "ShortTermMemoryStore",
+    "extract_memory_candidates",
+    "get_long_term_memory",
+    "get_short_term_memory",
+]
+
+
+
+================================================
+FILE: backend/memory/long_term.py
+================================================
+from datetime import UTC, datetime
+from functools import lru_cache
+from typing import Any
+
+from backend.config import get_settings
+from backend.schemas import MemoryRecord
+
+
+class LongTermMemoryStore:
+    """MongoDB-backed user memory with a no-op mode for local development."""
+
+    def __init__(
+        self,
+        mongodb_uri: str | None,
+        database_name: str,
+        collection_name: str,
+    ) -> None:
+        if mongodb_uri:
+            try:
+                from motor.motor_asyncio import AsyncIOMotorClient
+            except ModuleNotFoundError as exc:
+                raise RuntimeError(
+                    "MongoDB memory requires the 'motor' package. Run 'uv sync' "
+                    "or install project dependencies before setting MONGODB_URI."
+                ) from exc
+            self._client = AsyncIOMotorClient(mongodb_uri)
+        else:
+            self._client = None
+
+        self._collection = (
+            self._client[database_name][collection_name] if self._client is not None else None
+        )
+
+    @property
+    def is_configured(self) -> bool:
+        return self._collection is not None
+
+    async def get_recent(self, user_id: str, limit: int = 10) -> list[MemoryRecord]:
+        if self._collection is None:
+            return []
+
+        cursor = (
+            self._collection.find({"user_id": user_id}, {"_id": 0, "key": 1, "value": 1, "source": 1})
+            .sort("created_at", -1)
+            .limit(limit)
+        )
+        documents = await cursor.to_list(length=limit)
+        return [self._document_to_record(document) for document in documents]
+
+    async def save_memory(self, user_id: str, key: str, value: str, source: str = "chat") -> bool:
+        if self._collection is None:
+            return False
+
+        now = datetime.now(UTC)
+        await self._collection.update_one(
+            {"user_id": user_id, "key": key},
+            {
+                "$set": {
+                    "value": value,
+                    "source": source,
+                    "updated_at": now,
+                },
+                "$setOnInsert": {"created_at": now},
+            },
+            upsert=True,
+        )
+        return True
+
+    async def clear(self, user_id: str) -> bool:
+        if self._collection is None:
+            return True
+
+        result = await self._collection.delete_many({"user_id": user_id})
+        return result.acknowledged
+
+    @staticmethod
+    def _document_to_record(document: dict[str, Any]) -> MemoryRecord:
+        return MemoryRecord(
+            key=str(document.get("key", "")),
+            value=str(document.get("value", "")),
+            source=str(document.get("source", "long_term")),
+        )
+
+
+def extract_memory_candidates(message: str) -> list[tuple[str, str]]:
+    lowered = message.lower().strip()
+    candidates: list[tuple[str, str]] = []
+
+    def add_candidate(key: str, value: str) -> None:
+        normalized_value = value.strip(" .")
+        if normalized_value and all(existing_value != normalized_value for _, existing_value in candidates):
+            candidates.append((key, normalized_value))
+
+    remember_markers = ("remember that ", "remember this: ", "please remember ")
+    for marker in remember_markers:
+        if marker in lowered:
+            value = message[lowered.index(marker) + len(marker) :]
+            add_candidate("remembered_fact", value)
+
+    preference_markers = ("i prefer ", "i like ", "my favorite ", "my favourite ")
+    for marker in preference_markers:
+        if marker in lowered:
+            value = message[lowered.index(marker) :]
+            add_candidate("preference", value)
+            break
+
+    identity_markers = ("my name is ", "i live in ", "i work at ")
+    for marker in identity_markers:
+        if marker in lowered:
+            value = message[lowered.index(marker) :]
+            key = marker.strip().replace(" ", "_")
+            add_candidate(key, value)
+            break
+
+    return candidates[:3]
+
+
+@lru_cache
+def get_long_term_memory() -> LongTermMemoryStore:
+    settings = get_settings()
+    return LongTermMemoryStore(
+        mongodb_uri=settings.mongodb_uri,
+        database_name=settings.mongodb_database,
+        collection_name=settings.mongodb_memory_collection,
+    )
+
+
+
+================================================
+FILE: backend/memory/short_term.py
+================================================
+from collections import deque
+from dataclasses import dataclass
+from functools import lru_cache
+from threading import RLock
+
+
+@dataclass(slots=True)
+class ConversationTurn:
+    user_message: str
+    assistant_reply: str
+
+
+class ShortTermMemoryStore:
+    """Stores the last N user/assistant turns for each session."""
+
+    def __init__(self, max_turns: int = 10) -> None:
+        self.max_turns = max_turns
+        self._sessions: dict[str, deque[ConversationTurn]] = {}
+        self._lock = RLock()
+
+    def get_history(self, session_id: str) -> list[ConversationTurn]:
+        with self._lock:
+            history = self._sessions.get(session_id)
+            return list(history) if history is not None else []
+
+    def append_turn(
+        self,
+        session_id: str,
+        user_message: str,
+        assistant_reply: str,
+    ) -> list[ConversationTurn]:
+        with self._lock:
+            if session_id not in self._sessions:
+                self._sessions[session_id] = deque(maxlen=self.max_turns)
+
+            self._sessions[session_id].append(
+                ConversationTurn(
+                    user_message=user_message,
+                    assistant_reply=assistant_reply,
+                )
+            )
+            return list(self._sessions[session_id])
+
+    def clear_session(self, session_id: str) -> bool:
+        with self._lock:
+            return self._sessions.pop(session_id, None) is not None
+
+
+@lru_cache
+def get_short_term_memory() -> ShortTermMemoryStore:
+    return ShortTermMemoryStore()
+
+
+
+================================================
+FILE: backend/observability/__init__.py
+================================================
+"""Observability integrations for traces and metrics."""
+
+
+
+
+================================================
+FILE: backend/routers/__init__.py
+================================================
+"""API routers."""
+
+from backend.routers import chat, health, memory
+
+__all__ = ["chat", "health", "memory"]
+
+
+
+================================================
+FILE: backend/routers/chat.py
+================================================
+from time import perf_counter
+
+from fastapi import APIRouter
+
+from backend.assistants import AssistantRunInput, get_assistant
+from backend.memory import extract_memory_candidates, get_long_term_memory, get_short_term_memory
+from backend.schemas import ChatRequest, ChatResponse
+
+router = APIRouter(tags=["chat"])
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def create_chat_completion(payload: ChatRequest) -> ChatResponse:
+    short_term_memory = get_short_term_memory()
+    long_term_memory = get_long_term_memory()
+    prior_turns = short_term_memory.get_history(payload.session_id)
+    remembered_context = await long_term_memory.get_recent(payload.user_id)
+    assistant = get_assistant(payload.model)
+
+    started_at = perf_counter()
+    result = await assistant.generate_reply(
+        AssistantRunInput(
+            session_id=payload.session_id,
+            user_id=payload.user_id,
+            message=payload.message,
+            history=prior_turns,
+            long_term_memory=remembered_context,
+        )
+    )
+    latency_ms = int((perf_counter() - started_at) * 1000)
+
+    short_term_memory.append_turn(
+        session_id=payload.session_id,
+        user_message=payload.message,
+        assistant_reply=result.reply,
+    )
+    for key, value in extract_memory_candidates(payload.message):
+        await long_term_memory.save_memory(payload.user_id, key, value)
+
+    return ChatResponse(
+        reply=result.reply,
+        tool_calls=result.tool_calls,
+        model=result.model_name,
+        latency_ms=latency_ms,
+        tokens_used=result.tokens_used,
+    )
+
+
+
+================================================
+FILE: backend/routers/health.py
+================================================
+from time import monotonic
+
+from fastapi import APIRouter
+
+from backend.config import get_settings
+from backend.schemas import HealthResponse
+
+router = APIRouter(tags=["health"])
+START_TIME = monotonic()
+
+
+@router.get("/health", response_model=HealthResponse)
+async def health_check() -> HealthResponse:
+    settings = get_settings()
+    return HealthResponse(
+        status="ok",
+        environment=settings.environment,
+        uptime_seconds=round(monotonic() - START_TIME, 3),
+        model_availability={
+            "oss": bool(settings.hf_token),
+            "frontier": bool(settings.openai_api_key),
+        },
+    )
+
+
+
+================================================
+FILE: backend/routers/memory.py
+================================================
+from fastapi import APIRouter
+
+from backend.memory import get_long_term_memory
+from backend.schemas import MemoryDeleteResponse, MemoryResponse
+
+router = APIRouter(tags=["memory"])
+
+
+@router.get("/memory/{user_id}", response_model=MemoryResponse)
+async def get_memory(user_id: str) -> MemoryResponse:
+    memory = get_long_term_memory()
+    return MemoryResponse(user_id=user_id, memories=await memory.get_recent(user_id))
+
+
+@router.delete("/memory/{user_id}", response_model=MemoryDeleteResponse)
+async def clear_memory(user_id: str) -> MemoryDeleteResponse:
+    memory = get_long_term_memory()
+    return MemoryDeleteResponse(user_id=user_id, cleared=await memory.clear(user_id))
+
+
+
+================================================
+FILE: backend/tools/__init__.py
+================================================
+"""Tool registry and tool implementations."""
+
+from backend.tools.registry import get_langchain_tools
+
+__all__ = ["get_langchain_tools"]
+
+
+
+================================================
+FILE: backend/tools/calculator.py
+================================================
+import ast
+import operator
+from collections.abc import Callable
+
+from langchain_core.tools import tool
+
+
+Number = int | float
+
+_BINARY_OPERATORS: dict[type[ast.operator], Callable[[Number, Number], Number]] = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+_UNARY_OPERATORS: dict[type[ast.unaryop], Callable[[Number], Number]] = {
+    ast.UAdd: operator.pos,
+    ast.USub: operator.neg,
+}
+
+
+def _evaluate_node(node: ast.AST) -> Number:
+    if isinstance(node, ast.Expression):
+        return _evaluate_node(node.body)
+
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+
+    if isinstance(node, ast.BinOp):
+        operator_fn = _BINARY_OPERATORS.get(type(node.op))
+        if operator_fn is None:
+            raise ValueError("Unsupported math operator.")
+        left = _evaluate_node(node.left)
+        right = _evaluate_node(node.right)
+        return operator_fn(left, right)
+
+    if isinstance(node, ast.UnaryOp):
+        operator_fn = _UNARY_OPERATORS.get(type(node.op))
+        if operator_fn is None:
+            raise ValueError("Unsupported unary operator.")
+        return operator_fn(_evaluate_node(node.operand))
+
+    raise ValueError("Only basic arithmetic expressions are supported.")
+
+
+def safe_calculate(expression: str) -> Number:
+    expression = expression.strip()
+    if not expression:
+        raise ValueError("Expression is empty.")
+    if len(expression) > 120:
+        raise ValueError("Expression is too long.")
+
+    parsed = ast.parse(expression, mode="eval")
+    result = _evaluate_node(parsed)
+    if abs(result) > 1_000_000_000_000:
+        raise ValueError("Result is outside the allowed range.")
+    return result
+
+
+@tool("calculator")
+def calculator(expression: str) -> str:
+    """Evaluate a basic arithmetic expression with +, -, *, /, //, %, and **."""
+    try:
+        return str(safe_calculate(expression))
+    except Exception as exc:
+        return f"Calculator error: {exc}"
+
+
+
+================================================
+FILE: backend/tools/registry.py
+================================================
+from functools import lru_cache
+
+from langchain_core.tools import BaseTool
+
+from backend.tools.calculator import calculator
+from backend.tools.search import web_search
+from backend.tools.translation import translation
+from backend.tools.wikipedia import wikipedia
+
+
+@lru_cache
+def get_langchain_tools() -> tuple[BaseTool, ...]:
+    return (
+        calculator,
+        web_search,
+        wikipedia,
+        translation,
+    )
+
+
+
+================================================
+FILE: backend/tools/search.py
+================================================
+import json
+
+import httpx
+from langchain_core.tools import tool
+
+
+DUCKDUCKGO_URL = "https://api.duckduckgo.com/"
+
+
+def _collect_related_topics(items: list[dict], results: list[dict[str, str]]) -> None:
+    for item in items:
+        if len(results) >= 3:
+            return
+        if "Topics" in item:
+            _collect_related_topics(item["Topics"], results)
+            continue
+        text = item.get("Text")
+        url = item.get("FirstURL")
+        if text and url:
+            results.append({"title": text.split(" - ")[0], "url": url, "snippet": text})
+
+
+@tool("web_search")
+async def web_search(query: str) -> str:
+    """Search the web for a query and return up to three concise DuckDuckGo results."""
+    if not query.strip():
+        return "Search error: query is empty."
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(
+                DUCKDUCKGO_URL,
+                params={
+                    "q": query,
+                    "format": "json",
+                    "no_html": 1,
+                    "skip_disambig": 1,
+                },
+            )
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        return f"Search error: {exc}"
+
+    payload = response.json()
+    results: list[dict[str, str]] = []
+    abstract = payload.get("AbstractText")
+    abstract_url = payload.get("AbstractURL")
+    heading = payload.get("Heading") or query
+    if abstract and abstract_url:
+        results.append({"title": heading, "url": abstract_url, "snippet": abstract})
+
+    _collect_related_topics(payload.get("RelatedTopics", []), results)
+    if not results:
+        return "No search results found."
+    return json.dumps(results[:3], ensure_ascii=True)
+
+
+
+================================================
+FILE: backend/tools/translation.py
+================================================
+import json
+from uuid import uuid4
+
+import httpx
+from langchain_core.tools import tool
+
+from backend.config import get_settings
+
+
+TRANSLATOR_URL = "https://api.cognitive.microsofttranslator.com/translate"
+
+
+@tool("translation")
+async def translation(text: str, target_language: str) -> str:
+    """Translate text into a target language code such as es, fr, hi, or ja."""
+    settings = get_settings()
+    if not settings.azure_translator_key or not settings.azure_translator_region:
+        return "Translation is not configured. Set AZURE_TRANSLATOR_KEY and AZURE_TRANSLATOR_REGION."
+
+    if not text.strip():
+        return "Translation error: text is empty."
+    if not target_language.strip():
+        return "Translation error: target language is empty."
+
+    headers = {
+        "Ocp-Apim-Subscription-Key": settings.azure_translator_key,
+        "Ocp-Apim-Subscription-Region": settings.azure_translator_region,
+        "Content-type": "application/json",
+        "X-ClientTraceId": str(uuid4()),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                TRANSLATOR_URL,
+                params={"api-version": "3.0", "to": target_language},
+                headers=headers,
+                json=[{"text": text}],
+            )
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        return f"Translation error: {exc}"
+
+    payload = response.json()
+    translated_text = payload[0]["translations"][0]["text"]
+    return json.dumps({"translated_text": translated_text}, ensure_ascii=True)
+
+
+
+================================================
+FILE: backend/tools/wikipedia.py
+================================================
+import json
+from urllib.parse import quote
+
+import httpx
+from langchain_core.tools import tool
+
+
+@tool("wikipedia")
+async def wikipedia(topic: str) -> str:
+    """Fetch a concise summary paragraph for a Wikipedia topic."""
+    topic = topic.strip()
+    if not topic:
+        return "Wikipedia error: topic is empty."
+
+    url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(topic)}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(url, headers={"accept": "application/json"})
+
+        if response.status_code == 404:
+            return f"No Wikipedia page found for {topic}."
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        return f"Wikipedia error: {exc}"
+
+    payload = response.json()
+    result = {
+        "title": payload.get("title", topic),
+        "summary": payload.get("extract", ""),
+        "url": payload.get("content_urls", {}).get("desktop", {}).get("page"),
+    }
+    return json.dumps(result, ensure_ascii=True)
 
 
