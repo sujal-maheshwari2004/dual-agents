@@ -1,6 +1,7 @@
 Directory structure:
 └── dual-agents/
     ├── README.md
+    ├── firebase.json
     ├── main.py
     ├── pyproject.toml
     ├── .env.example
@@ -39,17 +40,48 @@ Directory structure:
     │       ├── search.py
     │       ├── translation.py
     │       └── wikipedia.py
-    └── evals/
-        ├── __init__.py
-        ├── judge.py
-        ├── prompt_suite.py
-        ├── run_evals.py
-        └── results/
-            ├── __init__.py
-            ├── figures.py
-            ├── smoke_results.json
-            └── smoke_figures/
-                └── cost_latency_table.csv
+    ├── deployment/
+    │   ├── cloudbuild.yaml
+    │   ├── Dockerfile.backend
+    │   ├── Dockerfile.grafana
+    │   ├── grafana/
+    │   │   ├── dashboard.json
+    │   │   ├── provisioning-dash.yaml
+    │   │   └── provisioning-ds.yaml
+    │   └── prometheus/
+    │       └── prometheus.yml
+    ├── evals/
+    │   ├── __init__.py
+    │   ├── judge.py
+    │   ├── prompt_suite.py
+    │   ├── run_evals.py
+    │   └── results/
+    │       ├── __init__.py
+    │       ├── figures.py
+    │       ├── smoke_results.json
+    │       └── smoke_figures/
+    │           └── cost_latency_table.csv
+    └── frontend/
+        ├── index.html
+        ├── package.json
+        ├── postcss.config.js
+        ├── tailwind.config.js
+        ├── vite.config.js
+        ├── .env.example
+        └── src/
+            ├── App.jsx
+            ├── index.css
+            ├── main.jsx
+            ├── api/
+            │   └── client.js
+            ├── components/
+            │   ├── ChatWindow.jsx
+            │   ├── MemoryPanel.jsx
+            │   ├── MessageBubble.jsx
+            │   ├── ModelToggle.jsx
+            │   └── ToolCallBadge.jsx
+            └── hooks/
+                └── useChat.js
 
 ================================================
 FILE: README.md
@@ -332,6 +364,55 @@ Each response gets a structured JSON score. Aggregated into per-category and ove
 - RAG layer on top of long-term memory
 - A/B testing framework baked into the eval pipeline
 
+
+
+================================================
+FILE: firebase.json
+================================================
+{
+  "hosting": {
+    "public": "frontend/dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ],
+    "headers": [
+      {
+        "source": "**/*.@(js|jsx|ts|tsx|css)",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=31536000, immutable"
+          }
+        ]
+      },
+      {
+        "source": "**",
+        "headers": [
+          {
+            "key": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "key": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "key": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          }
+        ]
+      }
+    ]
+  }
+}
 
 
 ================================================
@@ -2210,6 +2291,453 @@ async def wikipedia(topic: str) -> str:
 
 
 ================================================
+FILE: deployment/cloudbuild.yaml
+================================================
+# cloudbuild.yaml â€” monorepo CI/CD for GCP Cloud Run
+#
+# Substitutions (set in Cloud Build trigger or --substitutions flag):
+#   _REGION          e.g. us-central1
+#   _BACKEND_SERVICE e.g. dual-agents-backend
+#   _GRAFANA_SERVICE e.g. dual-agents-grafana
+#   _MONGODB_URI     MongoDB Atlas connection string (use Secret Manager ref)
+#   _OPENAI_API_KEY  OpenAI key (use Secret Manager ref)
+#   _HF_TOKEN        Hugging Face token
+#   _PROMETHEUS_URL  Backend Cloud Run URL, used by Grafana datasource
+
+substitutions:
+  _REGION: us-central1
+  _BACKEND_SERVICE: dual-agents-backend
+  _GRAFANA_SERVICE: dual-agents-grafana
+
+steps:
+
+  # â”€â”€ 1. Build backend image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  - name: gcr.io/cloud-builders/docker
+    id: build-backend
+    args:
+      - build
+      - -f
+      - deployment/Dockerfile.backend
+      - -t
+      - gcr.io/$PROJECT_ID/$_BACKEND_SERVICE:$SHORT_SHA
+      - -t
+      - gcr.io/$PROJECT_ID/$_BACKEND_SERVICE:latest
+      - .
+    waitFor: ['-']
+
+  # â”€â”€ 2. Push backend image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  - name: gcr.io/cloud-builders/docker
+    id: push-backend
+    args:
+      - push
+      - --all-tags
+      - gcr.io/$PROJECT_ID/$_BACKEND_SERVICE
+    waitFor: ['build-backend']
+
+  # â”€â”€ 3. Deploy backend to Cloud Run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: deploy-backend
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - $_BACKEND_SERVICE
+      - --image=gcr.io/$PROJECT_ID/$_BACKEND_SERVICE:$SHORT_SHA
+      - --region=$_REGION
+      - --platform=managed
+      - --allow-unauthenticated
+      - --memory=512Mi
+      - --cpu=1
+      - --min-instances=0
+      - --max-instances=3
+      - --port=8000
+      - --set-env-vars=ENVIRONMENT=production
+      - --update-secrets=OPENAI_API_KEY=openai-api-key:latest,HF_TOKEN=hf-token:latest,MONGODB_URI=mongodb-uri:latest,LANGCHAIN_API_KEY=langchain-api-key:latest,AZURE_TRANSLATOR_KEY=azure-translator-key:latest,AZURE_TRANSLATOR_REGION=azure-translator-region:latest
+    waitFor: ['push-backend']
+
+  # â”€â”€ 4. Build Grafana image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  - name: gcr.io/cloud-builders/docker
+    id: build-grafana
+    args:
+      - build
+      - -f
+      - deployment/Dockerfile.grafana
+      - -t
+      - gcr.io/$PROJECT_ID/$_GRAFANA_SERVICE:$SHORT_SHA
+      - -t
+      - gcr.io/$PROJECT_ID/$_GRAFANA_SERVICE:latest
+      - deployment/
+    waitFor: ['-']
+
+  # â”€â”€ 5. Push Grafana image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  - name: gcr.io/cloud-builders/docker
+    id: push-grafana
+    args:
+      - push
+      - --all-tags
+      - gcr.io/$PROJECT_ID/$_GRAFANA_SERVICE
+    waitFor: ['build-grafana']
+
+  # â”€â”€ 6. Deploy Grafana to Cloud Run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: deploy-grafana
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - $_GRAFANA_SERVICE
+      - --image=gcr.io/$PROJECT_ID/$_GRAFANA_SERVICE:$SHORT_SHA
+      - --region=$_REGION
+      - --platform=managed
+      - --allow-unauthenticated
+      - --memory=256Mi
+      - --cpu=1
+      - --min-instances=0
+      - --max-instances=1
+      - --port=3000
+      - --set-env-vars=PROMETHEUS_URL=$_PROMETHEUS_URL
+    waitFor: ['push-grafana']
+
+images:
+  - gcr.io/$PROJECT_ID/$_BACKEND_SERVICE:$SHORT_SHA
+  - gcr.io/$PROJECT_ID/$_BACKEND_SERVICE:latest
+  - gcr.io/$PROJECT_ID/$_GRAFANA_SERVICE:$SHORT_SHA
+  - gcr.io/$PROJECT_ID/$_GRAFANA_SERVICE:latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+timeout: 900s
+
+
+================================================
+FILE: deployment/Dockerfile.backend
+================================================
+# â”€â”€ Stage 1: dependency install â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+FROM python:3.12-slim AS deps
+
+WORKDIR /app
+
+# Install uv for fast installs
+RUN pip install --no-cache-dir uv
+
+COPY pyproject.toml .
+RUN uv pip install --system --no-cache -e .
+
+# â”€â”€ Stage 2: runtime image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+FROM python:3.12-slim AS runtime
+
+WORKDIR /app
+
+# Non-root user for Cloud Run security best practice
+RUN addgroup --system app && adduser --system --ingroup app app
+
+# Copy installed packages from deps stage
+COPY --from=deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=deps /usr/local/bin /usr/local/bin
+
+# Copy application source
+COPY backend/ ./backend/
+COPY main.py   ./main.py
+
+# Cloud Run injects PORT; default to 8000 for local container runs
+ENV PORT=8000 \
+    ENVIRONMENT=production \
+    APP_HOST=0.0.0.0
+
+# Run as non-root
+USER app
+
+EXPOSE ${PORT}
+
+CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT} --workers 1"]
+
+
+================================================
+FILE: deployment/Dockerfile.grafana
+================================================
+# Stateless Grafana â€” config baked in, no persistent volume needed.
+# Dashboard JSON is provisioned at build time via grafana/dashboard.json.
+FROM grafana/grafana:11.2.0
+
+# Disable auth for public demo; swap to GF_AUTH_ANONYMOUS_ENABLED=false
+# and add GF_SECURITY_ADMIN_* vars for a private deployment.
+ENV GF_AUTH_ANONYMOUS_ENABLED=true \
+    GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer \
+    GF_SERVER_ROOT_URL=/ \
+    GF_SERVER_SERVE_FROM_SUB_PATH=false \
+    GF_LOG_LEVEL=warn
+
+# Prometheus datasource â€” URL is injected at runtime via Cloud Run env var
+# PROMETHEUS_URL=http://<backend-service>/metrics
+# We write it as a provisioning file using an entrypoint override below.
+
+COPY grafana/dashboard.json          /etc/grafana/provisioning/dashboards/dual-agents.json
+COPY grafana/provisioning-ds.yaml    /etc/grafana/provisioning/datasources/prometheus.yaml
+COPY grafana/provisioning-dash.yaml  /etc/grafana/provisioning/dashboards/default.yaml
+
+EXPOSE 3000
+
+# Grafana reads PORT from GF_SERVER_HTTP_PORT
+ENV GF_SERVER_HTTP_PORT=3000
+
+
+================================================
+FILE: deployment/grafana/dashboard.json
+================================================
+{
+  "__inputs": [],
+  "__requires": [],
+  "annotations": { "list": [] },
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "Traffic",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "reqps" },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1 },
+      "id": 1,
+      "options": { "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "sum(rate(dual_agents_chat_requests_total[1m])) by (model)",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "title": "Chat requests / sec (by model)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "reqps" },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1 },
+      "id": 2,
+      "targets": [
+        {
+          "expr": "sum(rate(dual_agents_chat_requests_total[1m])) by (outcome)",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "title": "Requests / sec (by outcome)",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 8 },
+      "id": 101,
+      "title": "Latency",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "ms" },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 9 },
+      "id": 3,
+      "options": { "legend": { "calcs": ["mean", "p95"], "displayMode": "table", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(dual_agents_chat_latency_seconds_bucket[5m])) by (le, model)) * 1000",
+          "legendFormat": "p50 {{model}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(dual_agents_chat_latency_seconds_bucket[5m])) by (le, model)) * 1000",
+          "legendFormat": "p95 {{model}}"
+        }
+      ],
+      "title": "Chat latency p50 / p95 (ms)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 9 },
+      "id": 4,
+      "targets": [
+        {
+          "expr": "dual_agents_active_sessions",
+          "legendFormat": "active sessions"
+        }
+      ],
+      "title": "Active sessions",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 },
+      "id": 102,
+      "title": "LLM & Tools",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 17 },
+      "id": 5,
+      "targets": [
+        {
+          "expr": "sum(increase(dual_agents_llm_tokens_total[1h])) by (model)",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "title": "LLM tokens (last 1h)",
+      "type": "bargauge"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 17 },
+      "id": 6,
+      "targets": [
+        {
+          "expr": "sum(rate(dual_agents_tool_calls_total[5m])) by (tool)",
+          "legendFormat": "{{tool}}"
+        }
+      ],
+      "title": "Tool calls / sec",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 17 },
+      "id": 7,
+      "targets": [
+        {
+          "expr": "sum(increase(dual_agents_memory_writes_total[1h])) by (model)",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "title": "Memory writes (last 1h)",
+      "type": "bargauge"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
+      "id": 103,
+      "title": "Guardrails",
+      "type": "row"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 25 },
+      "id": 8,
+      "targets": [
+        {
+          "expr": "sum(increase(dual_agents_guardrail_flags_total[1h])) by (source, code, blocked)",
+          "legendFormat": "{{source}}:{{code}} blocked={{blocked}}"
+        }
+      ],
+      "title": "Guardrail flags (last 1h)",
+      "type": "bargauge"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["dual-agents"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Dual Agents",
+  "uid": "dual-agents-v1",
+  "version": 1
+}
+
+
+================================================
+FILE: deployment/grafana/provisioning-dash.yaml
+================================================
+apiVersion: 1
+
+providers:
+  - name: dual-agents
+    orgId: 1
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards
+
+
+================================================
+FILE: deployment/grafana/provisioning-ds.yaml
+================================================
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # PROMETHEUS_URL is set as a Cloud Run env var, e.g. https://backend-xxxx.run.app
+    url: ${PROMETHEUS_URL}
+    isDefault: true
+    editable: false
+
+
+================================================
+FILE: deployment/prometheus/prometheus.yml
+================================================
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: dual-agents-backend
+    # For local docker-compose: target is the backend container name.
+    # For Cloud Run: replace with the backend service URL and add bearer_token_file
+    # or basic_auth if you add auth to /metrics.
+    static_configs:
+      - targets:
+          - backend:8000   # docker-compose service name
+    metrics_path: /metrics
+    scheme: http
+
+  # Uncomment and fill in for Cloud Run scraping via public /metrics endpoint.
+  # - job_name: dual-agents-backend-cloudrun
+  #   static_configs:
+  #     - targets:
+  #         - <backend-service-url>.run.app
+  #   metrics_path: /metrics
+  #   scheme: https
+
+
+================================================
 FILE: evals/__init__.py
 ================================================
 """Evaluation framework for comparing the OSS and frontier assistants."""
@@ -3187,4 +3715,760 @@ model,avg_latency_ms,total_tokens,avg_tokens,estimated_cost_usd
 frontier,1.0,0,0.0,0.0
 oss,7.0,0,0.0,0.0
 
+
+
+================================================
+FILE: frontend/index.html
+================================================
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dual Agents</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&family=Roboto+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+
+
+================================================
+FILE: frontend/package.json
+================================================
+{
+  "name": "dual-agents-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.14",
+    "vite": "^5.4.10"
+  }
+}
+
+
+================================================
+FILE: frontend/postcss.config.js
+================================================
+export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}
+
+
+================================================
+FILE: frontend/tailwind.config.js
+================================================
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ['./index.html', './src/**/*.{js,jsx}'],
+  theme: {
+    extend: {
+      fontFamily: {
+        mono: ['"Roboto Mono"', 'monospace'],
+        sans: ['"DM Sans"', 'sans-serif'],
+      },
+      colors: {
+        bg:       '#0d0d0d',
+        surface:  '#141414',
+        border:   '#222222',
+        muted:    '#3a3a3a',
+        dim:      '#888888',
+        text:     '#e8e8e8',
+        accent:   '#7aff8a',   /* muted terminal green */
+        danger:   '#ff5f5f',
+        warn:     '#f0b429',
+      },
+      animation: {
+        'fade-up':   'fadeUp 0.18s ease both',
+        'blink':     'blink 1s step-end infinite',
+        'pulse-dot': 'pulseDot 1.4s ease-in-out infinite',
+      },
+      keyframes: {
+        fadeUp: {
+          '0%':   { opacity: '0', transform: 'translateY(6px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+        blink: {
+          '0%, 100%': { opacity: '1' },
+          '50%':      { opacity: '0' },
+        },
+        pulseDot: {
+          '0%, 100%': { opacity: '0.3', transform: 'scale(0.8)' },
+          '50%':      { opacity: '1',   transform: 'scale(1)' },
+        },
+      },
+    },
+  },
+  plugins: [],
+}
+
+
+================================================
+FILE: frontend/vite.config.js
+================================================
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    proxy: {
+      '/chat': 'http://127.0.0.1:8000',
+      '/memory': 'http://127.0.0.1:8000',
+      '/health': 'http://127.0.0.1:8000',
+    },
+  },
+})
+
+
+================================================
+FILE: frontend/.env.example
+================================================
+[Empty file]
+
+
+================================================
+FILE: frontend/src/App.jsx
+================================================
+[Empty file]
+
+
+================================================
+FILE: frontend/src/index.css
+================================================
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    background-color: #0d0d0d;
+    color: #e8e8e8;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background: #7aff8a33;
+    color: #e8e8e8;
+  }
+
+  /* Scrollbar â€” thin, on-brand */
+  ::-webkit-scrollbar        { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track  { background: transparent; }
+  ::-webkit-scrollbar-thumb  { background: #3a3a3a; border-radius: 2px; }
+  ::-webkit-scrollbar-thumb:hover { background: #7aff8a66; }
+}
+
+@layer utilities {
+  .border-grid { border-color: #222222; }
+
+  /* Subtle scanline texture overlay */
+  .scanlines {
+    background-image: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.07) 2px,
+      rgba(0,0,0,0.07) 4px
+    );
+    pointer-events: none;
+  }
+
+  /* Accent glow â€” used on the green dot and active states */
+  .glow-accent {
+    box-shadow: 0 0 0 1px #7aff8a44, 0 0 12px #7aff8a22;
+  }
+
+  .text-accent-dim {
+    color: #5bcc6a;
+  }
+}
+
+
+================================================
+FILE: frontend/src/main.jsx
+================================================
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './App.jsx'
+import './index.css'
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+)
+
+
+================================================
+FILE: frontend/src/api/client.js
+================================================
+const BASE = import.meta.env.VITE_API_URL ?? ''
+
+/**
+ * POST /chat
+ * @param {{ sessionId: string, userId: string, message: string, model: 'oss'|'frontier' }} params
+ * @returns {Promise<ChatResponse>}
+ */
+export async function sendMessage({ sessionId, userId, message, model }) {
+  const res = await fetch(`${BASE}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      session_id: sessionId,
+      user_id:    userId,
+      message,
+      model,
+    }),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Chat request failed (${res.status}): ${text}`)
+  }
+  return res.json()
+}
+
+/**
+ * GET /memory/:userId
+ * @param {string} userId
+ * @returns {Promise<MemoryResponse>}
+ */
+export async function getMemory(userId) {
+  const res = await fetch(`${BASE}/memory/${encodeURIComponent(userId)}`)
+  if (!res.ok) throw new Error(`Memory fetch failed (${res.status})`)
+  return res.json()
+}
+
+/**
+ * DELETE /memory/:userId
+ * @param {string} userId
+ * @returns {Promise<{ user_id: string, cleared: boolean }>}
+ */
+export async function clearMemory(userId) {
+  const res = await fetch(`${BASE}/memory/${encodeURIComponent(userId)}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) throw new Error(`Memory clear failed (${res.status})`)
+  return res.json()
+}
+
+/**
+ * GET /health
+ */
+export async function getHealth() {
+  const res = await fetch(`${BASE}/health`)
+  if (!res.ok) throw new Error(`Health check failed (${res.status})`)
+  return res.json()
+}
+
+
+================================================
+FILE: frontend/src/components/ChatWindow.jsx
+================================================
+import { useEffect, useRef, useState } from 'react'
+import MessageBubble from './MessageBubble'
+
+const PLACEHOLDER_HINTS = [
+  'Ask anythingâ€¦',
+  'Try: "translate hello to Japanese"',
+  'Try: "what is 144 * 37?"',
+  'Try: "who was Ada Lovelace?"',
+  'Try: "search: latest AI news"',
+]
+
+/**
+ * ChatWindow â€” full-height flex column.
+ * Top:    scrollable message list, auto-scrolls to bottom.
+ * Bottom: pinned composer with send button.
+ */
+export default function ChatWindow({ messages, loading, onSend }) {
+  const [input, setInput]       = useState('')
+  const [hint]                  = useState(() => PLACEHOLDER_HINTS[Math.floor(Math.random() * PLACEHOLDER_HINTS.length)])
+  const bottomRef               = useRef(null)
+  const textareaRef             = useRef(null)
+
+  // Auto-scroll to latest message
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages, loading])
+
+  const submit = () => {
+    if (!input.trim() || loading) return
+    onSend(input)
+    setInput('')
+    textareaRef.current?.focus()
+  }
+
+  const handleKey = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      submit()
+    }
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Message list */}
+      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
+        {messages.length === 0 && (
+          <div className="h-full flex items-center justify-center">
+            <div className="text-center space-y-2">
+              <p className="font-mono text-xs uppercase tracking-widest text-muted">
+                dual agents / ready
+              </p>
+              <p className="text-dim text-sm">
+                Send a message to begin.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {messages.map(msg => (
+          <MessageBubble key={msg.id} message={msg} />
+        ))}
+
+        {/* Loading indicator */}
+        {loading && (
+          <div className="flex items-center gap-2 animate-fade-up">
+            <div className="flex gap-1 ml-4">
+              {[0, 1, 2].map(i => (
+                <span
+                  key={i}
+                  className="w-1.5 h-1.5 bg-accent/60 rounded-full animate-pulse-dot"
+                  style={{ animationDelay: `${i * 0.22}s` }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Composer */}
+      <div className="border-t border-border bg-surface px-4 py-3 flex gap-3 items-end">
+        <textarea
+          ref={textareaRef}
+          rows={1}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={handleKey}
+          placeholder={hint}
+          disabled={loading}
+          className={[
+            'flex-1 resize-none bg-transparent text-text text-sm leading-relaxed',
+            'placeholder:text-muted outline-none font-sans',
+            'max-h-32 overflow-y-auto',
+            'disabled:opacity-50',
+          ].join(' ')}
+          style={{ fieldSizing: 'content' }}
+        />
+
+        <button
+          onClick={submit}
+          disabled={!input.trim() || loading}
+          className={[
+            'font-mono text-xs uppercase tracking-widest px-4 py-2',
+            'border transition-colors duration-150 cursor-pointer',
+            input.trim() && !loading
+              ? 'border-accent text-accent hover:bg-accent hover:text-bg'
+              : 'border-border text-muted cursor-not-allowed',
+          ].join(' ')}
+        >
+          Send
+        </button>
+      </div>
+    </div>
+  )
+}
+
+
+================================================
+FILE: frontend/src/components/MemoryPanel.jsx
+================================================
+import { useCallback, useEffect, useState } from 'react'
+import { clearMemory, getMemory } from '../api/client'
+
+/**
+ * MemoryPanel â€” collapsible sidebar panel.
+ * Fetches long-term memory for the current user on open.
+ */
+export default function MemoryPanel({ userId }) {
+  const [open, setOpen]       = useState(false)
+  const [records, setRecords] = useState([])
+  const [status, setStatus]   = useState('idle') // 'idle' | 'loading' | 'error'
+
+  const load = useCallback(async () => {
+    setStatus('loading')
+    try {
+      const data = await getMemory(userId)
+      setRecords(data.memories ?? [])
+      setStatus('idle')
+    } catch {
+      setStatus('error')
+    }
+  }, [userId])
+
+  useEffect(() => {
+    if (open) load()
+  }, [open, load])
+
+  const handleClear = async () => {
+    setStatus('loading')
+    try {
+      await clearMemory(userId)
+      setRecords([])
+      setStatus('idle')
+    } catch {
+      setStatus('error')
+    }
+  }
+
+  return (
+    <div className="border-t border-border font-mono text-xs">
+      {/* Toggle row */}
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-4 py-2.5 text-dim hover:text-accent hover:bg-surface/60 transition-colors cursor-pointer"
+      >
+        <span className="uppercase tracking-widest">Long-term Memory</span>
+        <span className="text-muted">{open ? 'â–²' : 'â–¼'}</span>
+      </button>
+
+      {open && (
+        <div className="border-t border-border bg-surface animate-fade-up">
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-2 border-b border-border">
+            <span className="text-muted uppercase tracking-widest">
+              {records.length} record{records.length !== 1 ? 's' : ''}
+            </span>
+            {records.length > 0 && (
+              <button
+                onClick={handleClear}
+                disabled={status === 'loading'}
+                className="text-danger hover:text-danger/70 uppercase tracking-widest transition-colors cursor-pointer disabled:opacity-40"
+              >
+                clear
+              </button>
+            )}
+          </div>
+
+          {/* Records list */}
+          <div className="max-h-52 overflow-y-auto divide-y divide-border">
+            {status === 'loading' && (
+              <div className="px-4 py-3 text-muted">loadingâ€¦</div>
+            )}
+            {status === 'error' && (
+              <div className="px-4 py-3 text-danger">Failed to fetch memory.</div>
+            )}
+            {status === 'idle' && records.length === 0 && (
+              <div className="px-4 py-3 text-muted">No memories stored yet.</div>
+            )}
+            {status === 'idle' && records.map((rec, i) => (
+              <div key={i} className="px-4 py-2 flex gap-3">
+                <span className="text-accent/70 shrink-0 w-28 truncate">{rec.key}</span>
+                <span className="text-dim truncate">{rec.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+================================================
+FILE: frontend/src/components/MessageBubble.jsx
+================================================
+import ToolCallBadge from './ToolCallBadge'
+
+const SEVERITY_COLOR = {
+  block:   'text-danger border-danger/40',
+  warning: 'text-warn  border-warn/40',
+}
+
+/**
+ * MessageBubble â€” renders a single conversation turn.
+ * User messages: right-aligned, accent-tinted border.
+ * Assistant messages: left-aligned, surface bg, metadata row beneath.
+ */
+export default function MessageBubble({ message }) {
+  const isUser = message.role === 'user'
+
+  if (isUser) {
+    return (
+      <div className="flex justify-end animate-fade-up">
+        <div className="max-w-[72%] px-4 py-2.5 border-r-2 border-accent/60 bg-surface text-text text-sm leading-relaxed">
+          {message.content}
+        </div>
+      </div>
+    )
+  }
+
+  // Assistant
+  const hasTools  = message.tool_calls?.length > 0
+  const hasFlags  = message.guardrail_flags?.length > 0
+
+  return (
+    <div className="flex flex-col gap-1 animate-fade-up">
+      {/* Content */}
+      <div className="max-w-[88%] px-4 py-2.5 border-l-2 border-border bg-surface text-text text-sm leading-relaxed whitespace-pre-wrap">
+        {message.content}
+      </div>
+
+      {/* Tool calls */}
+      {hasTools && (
+        <div className="ml-4 flex flex-wrap gap-1">
+          {message.tool_calls.map((tc, i) => (
+            <ToolCallBadge key={i} toolCall={tc} />
+          ))}
+        </div>
+      )}
+
+      {/* Guardrail flags */}
+      {hasFlags && (
+        <div className="ml-4 flex flex-wrap gap-1">
+          {message.guardrail_flags.map((flag, i) => (
+            <span
+              key={i}
+              className={`font-mono text-[10px] px-2 py-0.5 border uppercase tracking-widest ${SEVERITY_COLOR[flag.severity] ?? 'text-dim border-border'}`}
+            >
+              {flag.source}:{flag.code}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Metadata row */}
+      {(message.model || message.latency_ms != null) && (
+        <div className="ml-4 flex items-center gap-3 font-mono text-[10px] text-muted uppercase tracking-widest">
+          {message.model && <span>{message.model}</span>}
+          {message.latency_ms != null && <span>{message.latency_ms}ms</span>}
+          {message.tokens_used > 0 && <span>{message.tokens_used} tok</span>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+================================================
+FILE: frontend/src/components/ModelToggle.jsx
+================================================
+/**
+ * ModelToggle â€” OSS / Frontier pill selector.
+ * Fits inside the header bar, sharp edges, accent highlight on active.
+ */
+export default function ModelToggle({ model, onChange }) {
+  const options = [
+    { value: 'frontier', label: 'GPT-4.1',      sub: 'frontier' },
+    { value: 'oss',      label: 'Qwen 2.5-0.5B', sub: 'oss'      },
+  ]
+
+  return (
+    <div className="flex items-stretch h-8 border border-border font-mono text-xs">
+      {options.map(({ value, label, sub }, i) => {
+        const active = model === value
+        return (
+          <button
+            key={value}
+            onClick={() => onChange(value)}
+            className={[
+              'flex flex-col items-center justify-center px-4 transition-colors duration-150 cursor-pointer select-none',
+              i === 0 ? 'border-r border-border' : '',
+              active
+                ? 'bg-accent text-bg font-medium'
+                : 'bg-surface text-dim hover:text-text hover:bg-muted/30',
+            ].join(' ')}
+          >
+            <span className="leading-none tracking-tight">{label}</span>
+            <span className={['text-[9px] mt-0.5 leading-none uppercase tracking-widest', active ? 'text-bg/60' : 'text-muted'].join(' ')}>
+              {sub}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+
+================================================
+FILE: frontend/src/components/ToolCallBadge.jsx
+================================================
+import { useState } from 'react'
+
+const TOOL_ICONS = {
+  web_search:  'âŒ•',
+  calculator:  'âˆ‘',
+  wikipedia:   'W',
+  translation: 'â‡„',
+}
+
+/**
+ * ToolCallBadge â€” shown below assistant messages when tool calls were made.
+ * Clicking expands to show input/output details.
+ */
+export default function ToolCallBadge({ toolCall }) {
+  const [open, setOpen] = useState(false)
+  const icon = TOOL_ICONS[toolCall.name] ?? 'â—†'
+
+  return (
+    <div className="mt-1 font-mono text-[11px]">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center gap-1.5 px-2 py-0.5 border border-border text-dim hover:text-accent hover:border-accent/40 transition-colors cursor-pointer"
+      >
+        <span className="text-accent/70">{icon}</span>
+        <span className="uppercase tracking-widest">{toolCall.name}</span>
+        <span className="ml-1 text-muted">{open ? 'â–²' : 'â–¼'}</span>
+      </button>
+
+      {open && (
+        <div className="mt-1 border border-border bg-surface p-2 space-y-1 text-[11px] animate-fade-up">
+          {toolCall.input && Object.keys(toolCall.input).length > 0 && (
+            <div>
+              <span className="text-muted uppercase tracking-widest">in </span>
+              <span className="text-dim">{JSON.stringify(toolCall.input)}</span>
+            </div>
+          )}
+          {toolCall.output != null && (
+            <div>
+              <span className="text-muted uppercase tracking-widest">out </span>
+              <span className="text-text/70 break-all">
+                {typeof toolCall.output === 'string'
+                  ? toolCall.output.slice(0, 300) + (toolCall.output.length > 300 ? 'â€¦' : '')
+                  : JSON.stringify(toolCall.output).slice(0, 300)}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+================================================
+FILE: frontend/src/hooks/useChat.js
+================================================
+import { useCallback, useRef, useState } from 'react'
+import { sendMessage } from '../api/client'
+
+/**
+ * Stable IDs for the session and user, generated once per page load.
+ */
+function makeId(prefix) {
+  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+const SESSION_ID = makeId('session')
+const USER_ID    = makeId('user')
+
+/**
+ * @typedef {{ id: string, role: 'user'|'assistant', content: string,
+ *   model?: string, latency_ms?: number, tokens_used?: number,
+ *   tool_calls?: any[], guardrail_flags?: any[], ts: number }} Message
+ */
+
+export function useChat() {
+  const [messages, setMessages]   = useState(/** @type {Message[]} */ ([]))
+  const [loading, setLoading]     = useState(false)
+  const [error, setError]         = useState(/** @type {string|null} */ (null))
+  const [model, setModel]         = useState(/** @type {'oss'|'frontier'} */ ('frontier'))
+  const abortRef                  = useRef(null)
+
+  const appendMessage = useCallback((msg) => {
+    setMessages(prev => [...prev, { id: makeId('msg'), ts: Date.now(), ...msg }])
+  }, [])
+
+  const send = useCallback(async (text) => {
+    const trimmed = text.trim()
+    if (!trimmed || loading) return
+
+    setError(null)
+    appendMessage({ role: 'user', content: trimmed })
+    setLoading(true)
+
+    try {
+      const data = await sendMessage({
+        sessionId: SESSION_ID,
+        userId:    USER_ID,
+        message:   trimmed,
+        model,
+      })
+
+      appendMessage({
+        role:            'assistant',
+        content:         data.reply,
+        model:           data.model,
+        latency_ms:      data.latency_ms,
+        tokens_used:     data.tokens_used,
+        tool_calls:      data.tool_calls      ?? [],
+        guardrail_flags: data.guardrail_flags ?? [],
+      })
+    } catch (err) {
+      setError(err.message ?? 'Unknown error')
+      appendMessage({
+        role:    'assistant',
+        content: 'âš  Request failed. Check the backend or your API keys.',
+        model:   model,
+      })
+    } finally {
+      setLoading(false)
+    }
+  }, [loading, model, appendMessage])
+
+  const clearMessages = useCallback(() => setMessages([]), [])
+
+  return {
+    messages,
+    loading,
+    error,
+    model,
+    setModel,
+    send,
+    clearMessages,
+    userId: USER_ID,
+    sessionId: SESSION_ID,
+  }
+}
 
