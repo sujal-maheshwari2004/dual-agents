@@ -15,6 +15,14 @@ class ToolCall(BaseModel):
     output: Any | None = None
 
 
+class GuardrailFlag(BaseModel):
+    source: str
+    code: str
+    message: str
+    severity: str = "warning"
+    blocked: bool = False
+
+
 class ChatRequest(BaseModel):
     session_id: str = Field(min_length=1)
     message: str = Field(min_length=1)
@@ -28,6 +36,7 @@ class ChatResponse(BaseModel):
     model: str
     latency_ms: int = Field(ge=0)
     tokens_used: int = Field(ge=0)
+    guardrail_flags: list[GuardrailFlag] = Field(default_factory=list)
 
 
 class MemoryRecord(BaseModel):
