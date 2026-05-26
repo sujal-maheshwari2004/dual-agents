@@ -1,22 +1,13 @@
 global:
   scrape_interval: 15s
-  evaluation_interval: 15s
 
 scrape_configs:
   - job_name: dual-agents-backend
-    # For local docker-compose: target is the backend container name.
-    # For Cloud Run: replace with the backend service URL and add bearer_token_file
-    # or basic_auth if you add auth to /metrics.
     static_configs:
       - targets:
-          - backend:8000   # docker-compose service name
+          - dual-agents-backend-lmzcevoixa-uc.a.run.app
     metrics_path: /metrics
-    scheme: http
-
-  # Uncomment and fill in for Cloud Run scraping via public /metrics endpoint.
-  # - job_name: dual-agents-backend-cloudrun
-  #   static_configs:
-  #     - targets:
-  #         - <backend-service-url>.run.app
-  #   metrics_path: /metrics
-  #   scheme: https
+    scheme: https
+    tls_config:
+      insecure_skip_verify: false   # Cloud Run has valid certs, keep this false
+    honor_labels: true

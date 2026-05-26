@@ -4,6 +4,6 @@ datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
-    url: https://dual-agents-backend-lmzcevoixa-uc.a.run.app
+    url: PROMETHEUS_URL_PLACEHOLDER
     isDefault: true
     editable: false

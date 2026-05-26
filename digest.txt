@@ -45,6 +45,7 @@ Directory structure:
     │   ├── cloudbuild.yaml
     │   ├── Dockerfile.backend
     │   ├── Dockerfile.grafana
+    │   ├── Dockerfile.prometheus
     │   ├── grafana/
     │   │   ├── dashboard.json
     │   │   ├── provisioning-dash.yaml
@@ -58,6 +59,7 @@ Directory structure:
     │   ├── run_evals.py
     │   └── results/
     │       ├── __init__.py
+    │       ├── cost_latency_table.csv
     │       ├── figures.py
     │       ├── smoke_results.json
     │       └── smoke_figures/
@@ -87,284 +89,138 @@ Directory structure:
 ================================================
 FILE: README.md
 ================================================
-# PRD â€” Dual AI Personal Assistant
+# Dual Agents
 
-## Project Summary
+Two AI personal assistants â€” one OSS (Qwen2.5-0.5B), one frontier (GPT-4.1) â€” built on a shared FastAPI + React fullstack, evaluated across hallucination, bias, and safety, and deployed publicly on GCP.
 
-Build two AI personal assistants â€” one OSS, one frontier â€” with a shared FastAPI + React fullstack architecture, evaluate them across hallucination, bias, and safety, and deploy everything publicly.
-
----
-
-## Stack Decisions
-
-| Layer | Choice | Reason |
-|---|---|---|
-| Frontend | React | Showcase fullstack capability |
-| Backend | FastAPI | Python-native, clean REST |
-| OSS Model | Qwen2.5-0.5B-Instruct | HF Spaces native, free tier |
-| Frontier Model | GPT-4.1 | Existing $5 OpenAI credits |
-| OSS Deployment | HF Spaces | Correct home for OSS models |
-| Backend Deployment | GCP Cloud Run | GCP credits, production-grade |
-| Frontend Deployment | Firebase Hosting | GCP ecosystem, free tier |
-| Long-term Memory | MongoDB Atlas | Free tier, two-tier memory story |
-| Short-term Memory | In-process Python dict | Ephemeral, session-scoped |
-| LLM Observability | LangSmith | Best in class, free tier |
-| Metrics | Prometheus + Grafana | Self-hosted on Cloud Run |
-| Translation | Microsoft Translator | 2M chars/month free, no expiry |
-| Web Search | DuckDuckGo API | Free, no key needed |
-| Calculator | Python eval sandbox | Zero dependency |
-| Wikipedia | Wikipedia REST API | Free |
+**Live demo:** https://bot-street.web.app
 
 ---
 
-## Repository Structure
+## Architecture
 
-```text
-ollive-assistant/
-â”œâ”€â”€ .env.example
-â”œâ”€â”€ .gitignore
-â”œâ”€â”€ README.md
-â”œâ”€â”€ requirements.txt
-â”‚
-â”œâ”€â”€ backend/
-â”‚   â”œâ”€â”€ main.py                  # FastAPI app entry point
-â”‚   â”œâ”€â”€ config.py                # Env var loading
-â”‚   â”‚
-â”‚   â”œâ”€â”€ assistants/
-â”‚   â”‚   â”œâ”€â”€ base.py              # Abstract base class
-â”‚   â”‚   â”œâ”€â”€ oss.py               # Qwen via HF Inference API
-â”‚   â”‚   â””â”€â”€ frontier.py          # GPT-4.1 via OpenAI SDK
-â”‚   â”‚
-â”‚   â”œâ”€â”€ memory/
-â”‚   â”‚   â”œâ”€â”€ short_term.py        # In-process session store
-â”‚   â”‚   â””â”€â”€ long_term.py         # MongoDB Atlas read/write
-â”‚   â”‚
-â”‚   â”œâ”€â”€ tools/
-â”‚   â”‚   â”œâ”€â”€ registry.py          # Tool dispatcher
-â”‚   â”‚   â”œâ”€â”€ search.py            # DuckDuckGo
-â”‚   â”‚   â”œâ”€â”€ calculator.py        # Safe eval sandbox
-â”‚   â”‚   â”œâ”€â”€ wikipedia.py         # Wikipedia REST
-â”‚   â”‚   â””â”€â”€ translation.py       # Microsoft Translator
-â”‚   â”‚
-â”‚   â”œâ”€â”€ guardrails/
-â”‚   â”‚   â”œâ”€â”€ input_guard.py       # Pre-generation check
-â”‚   â”‚   â””â”€â”€ output_guard.py      # Post-generation check
-â”‚   â”‚
-â”‚   â”œâ”€â”€ observability/
-â”‚   â”‚   â”œâ”€â”€ langsmith.py         # LLM trace logging
-â”‚   â”‚   â””â”€â”€ metrics.py           # Prometheus instrumentation
-â”‚   â”‚
-â”‚   â””â”€â”€ routers/
-â”‚       â”œâ”€â”€ chat.py              # POST /chat
-â”‚       â”œâ”€â”€ memory.py            # GET/DELETE /memory
-â”‚       â””â”€â”€ health.py            # GET /health
-â”‚
-â”œâ”€â”€ frontend/
-â”‚   â”œâ”€â”€ public/
-â”‚   â”œâ”€â”€ src/
-â”‚   â”‚   â”œâ”€â”€ App.jsx
-â”‚   â”‚   â”œâ”€â”€ components/
-â”‚   â”‚   â”‚   â”œâ”€â”€ ChatWindow.jsx
-â”‚   â”‚   â”‚   â”œâ”€â”€ MessageBubble.jsx
-â”‚   â”‚   â”‚   â”œâ”€â”€ ToolCallBadge.jsx
-â”‚   â”‚   â”‚   â””â”€â”€ ModelToggle.jsx
-â”‚   â”‚   â”œâ”€â”€ hooks/
-â”‚   â”‚   â”‚   â””â”€â”€ useChat.js
-â”‚   â”‚   â””â”€â”€ api/
-â”‚   â”‚       â””â”€â”€ client.js
-â”‚   â””â”€â”€ package.json
-â”‚
-â”œâ”€â”€ evals/
-â”‚   â”œâ”€â”€ prompt_suite.py          # 30 prompts, 3 categories
-â”‚   â”œâ”€â”€ judge.py                 # GPT-4.1-mini as judge
-â”‚   â”œâ”€â”€ run_evals.py             # Runs both, scores, logs
-â”‚   â””â”€â”€ results/
-â”‚       â”œâ”€â”€ raw_results.json
-â”‚       â””â”€â”€ figures.py           # Matplotlib infographics
-â”‚
-â”œâ”€â”€ deployment/
-â”‚   â”œâ”€â”€ Dockerfile.backend
-â”‚   â”œâ”€â”€ Dockerfile.grafana
-â”‚   â”œâ”€â”€ cloudbuild.yaml
-â”‚   â”œâ”€â”€ grafana/
-â”‚   â”‚   â””â”€â”€ dashboard.json
-â”‚   â””â”€â”€ prometheus/
-â”‚       â””â”€â”€ prometheus.yml
-â”‚
-â””â”€â”€ docs/
-    â””â”€â”€ evaluation_report.pdf
+```
+React (Firebase Hosting)
+       â”‚
+       â–¼
+FastAPI (GCP Cloud Run)
+       â”‚
+       â”œâ”€â”€ Qwen2.5-0.5B  (HF Space â†’ OpenAI-compatible endpoint)
+       â”œâ”€â”€ GPT-4.1        (OpenAI API)
+       â”‚
+       â”œâ”€â”€ Tools          (web search, calculator, wikipedia, translation)
+       â”œâ”€â”€ Guardrails     (input + output, PII filtering, jailbreak detection)
+       â”œâ”€â”€ Memory         (short-term in-process, long-term MongoDB Atlas)
+       â””â”€â”€ Observability  (LangSmith traces, Prometheus + Grafana)
+```
+
+---
+
+## Stack
+
+| Layer | Choice |
+|---|---|
+| Frontend | React + Tailwind + Vite |
+| Backend | FastAPI + LangGraph |
+| OSS Model | Qwen2.5-0.5B-Instruct (HF Space) |
+| Frontier Model | GPT-4.1 (OpenAI) |
+| Memory | MongoDB Atlas + in-process dict |
+| Observability | LangSmith + Prometheus + Grafana |
+| Deployment | GCP Cloud Run + Firebase Hosting |
+
+---
+
+## Features
+
+- **Model toggle** â€” switch between OSS and frontier mid-conversation
+- **Tool use** â€” web search, calculator, Wikipedia, translation (frontier only)
+- **Two-tier memory** â€” short-term session history + long-term MongoDB persistence
+- **Guardrails** â€” input + output checks for jailbreaks, PII, harmful content, hallucination markers
+- **Evals** â€” 30-prompt suite scored by GPT-4.1-mini across accuracy, safety, and neutrality
+- **Observability** â€” every LLM call traced in LangSmith, metrics in Grafana
+
+---
+
+## Local Setup
+
+### Backend
+
+```bash
+git clone https://github.com/MaheshwariSujal/dual-agents
+cd dual-agents
+cp .env.example .env
+# fill in your keys
+uv sync
+python main.py
+```
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
 ```
 
 ---
 
 ## Environment Variables
 
-All local secrets live in `.env`, never committed. Cloud Run uses its own env var config.
+| Variable | Description |
+|---|---|
+| `OPENAI_API_KEY` | OpenAI key for GPT-4.1 |
+| `HF_TOKEN` | Hugging Face token |
+| `HF_BASE_URL` | HF Space inference URL |
+| `MONGODB_URI` | MongoDB Atlas connection string |
+| `AZURE_TRANSLATOR_KEY` | Microsoft Translator key |
+| `AZURE_TRANSLATOR_REGION` | Microsoft Translator region |
+| `LANGCHAIN_API_KEY` | LangSmith key |
 
-```dotenv
-# OpenAI
-OPENAI_API_KEY=
+---
 
-# Hugging Face
-HF_TOKEN=
+## Running Evals
 
-# MongoDB Atlas
-MONGODB_URI=
+```bash
+# Full suite
+python -m evals.run_evals
 
-# Microsoft Translator
-AZURE_TRANSLATOR_KEY=
-AZURE_TRANSLATOR_REGION=
+# Smoke test (1 prompt)
+python -m evals.run_evals --limit 1
 
-# LangSmith
-LANGCHAIN_API_KEY=
-LANGCHAIN_PROJECT=
-
-# App
-ENVIRONMENT=local
+# Generate figures
+python -m evals.results.figures
 ```
 
 ---
 
-## API Contracts
+## Deployment
 
-### POST /chat
+| Service | Platform |
+|---|---|
+| Frontend | Firebase Hosting |
+| Backend | GCP Cloud Run |
+| Grafana | GCP Cloud Run |
+| OSS Model | HF Space |
+| Database | MongoDB Atlas |
 
-```json
-Request:
-{
-  "session_id": "string",
-  "message": "string",
-  "model": "oss" | "frontier",
-  "user_id": "string"
-}
+```bash
+# Backend
+gcloud builds submit
 
-Response:
-{
-  "reply": "string",
-  "tool_calls": [],
-  "model": "string",
-  "latency_ms": 0,
-  "tokens_used": 0
-}
+# Frontend
+cd frontend && npm run build && cd .. && firebase deploy
 ```
 
-### GET /memory/{user_id}
-
-Returns stored long-term memory for a user.
-
-### DELETE /memory/{user_id}
-
-Clears long-term memory.
-
-### GET /health
-
-Returns service status, uptime, model availability.
-
 ---
 
-## Memory Architecture
+## Future Improvements
 
-Two-tier, always active:
-
-**Short-term** â€” Python dict keyed by `session_id`. Holds last 10 message pairs. Lives in the FastAPI process. Wiped when the session ends or container restarts.
-
-**Long-term** â€” MongoDB Atlas. At session end, key facts and preferences are extracted and persisted. At session start, the last N long-term entries are fetched and injected into the system prompt to prime context.
-
----
-
-## Tools
-
-Each tool is a standalone function registered in `tools/registry.py`. The assistant decides which to call based on the user message. Tool calls are surfaced in the frontend via a `ToolCallBadge` component.
-
-| Tool | Input | Output |
-|---|---|---|
-| web_search | query string | top 3 results |
-| calculator | math expression | result |
-| wikipedia | topic string | summary paragraph |
-| translation | text + target lang | translated text |
-
----
-
-## Guardrails
-
-**Input guard** â€” runs before generation. Checks for jailbreak patterns, prompt injection, and harmful intent via keyword matching + a lightweight classifier. Blocks and returns a safe refusal if triggered.
-
-**Output guard** â€” runs after generation. Checks for PII leakage, harmful content, and hallucination markers. Flags or filters before sending to the client.
-
-Applied to both assistants. The OSS assistant gets stricter input guards since it has no native safety layer.
-
----
-
-## Observability
-
-**LangSmith** â€” traces every LLM call. Logs prompt, response, token count, latency, model name, tool calls used. Eval scores get logged here too.
-
-**Prometheus + Grafana** â€” FastAPI instrumented via `prometheus-fastapi-instrumentator`. Tracks request count, latency histogram, error rate, active sessions. Grafana self-hosted on Cloud Run, scrapes Prometheus.
-
----
-
-## Evaluation Framework
-
-### Prompt Suite â€” 30 prompts, 3 categories
-
-**Factual (10 prompts)** â€” questions with verifiable ground truth. Tests hallucination rate. References TruthfulQA categories for credibility.
-
-**Adversarial/Jailbreak (10 prompts)** â€” prompt injection attempts, roleplay bypasses, indirect harmful requests. References AdvBench framing.
-
-**Bias/Sensitive (10 prompts)** â€” questions touching on gender, religion, politics, race. Tests for stereotyping and discriminatory outputs.
-
-### Scoring â€” LLM-as-judge
-
-GPT-4.1-mini judges every response on a 1-5 scale per axis:
-- Accuracy / groundedness
-- Safety / refusal appropriateness
-- Neutrality / absence of bias
-
-Each response gets a structured JSON score. Aggregated into per-category and overall scores for both assistants.
-
-### Report Infographics
-
-- Radar chart â€” overall scores per assistant across all 3 axes
-- Bar chart â€” category-by-category breakdown
-- Cost + latency table â€” OSS vs frontier per request
-
----
-
-## Deployment Plan
-
-| Service | Platform | Notes |
-|---|---|---|
-| React frontend | Firebase Hosting | `firebase deploy` |
-| FastAPI backend | Cloud Run | Dockerfile.backend |
-| Grafana | Cloud Run | Dockerfile.grafana, stateless config |
-| Qwen2.5-0.5B | HF Spaces | Separate repo/space |
-| MongoDB | Atlas free tier | M0 cluster |
-| LangSmith | Managed | No infra needed |
-
----
-
-## README Sections
-
-1. Project overview
-2. Architecture diagram
-3. Setup instructions â€” local and cloud
-4. Environment variables reference
-5. How to run evals
-6. Architecture decisions
-7. Tradeoffs made
-8. What would be improved with more time
-
----
-
-## What We Document as Future Improvements
-
-- Persistent Grafana state via Cloud Storage volume
 - Streaming responses via SSE or WebSocket
 - User auth via Firebase Auth
-- Fine-tuned guardrail classifier instead of keyword matching
 - RAG layer on top of long-term memory
-- A/B testing framework baked into the eval pipeline
-
+- Fine-tuned guardrail classifier
+- Persistent Grafana state via Cloud Storage
+- A/B testing in the eval pipeline
 
 
 ================================================
@@ -2297,19 +2153,21 @@ FILE: deployment/cloudbuild.yaml
 #   _REGION          e.g. us-central1
 #   _BACKEND_SERVICE e.g. dual-agents-backend
 #   _GRAFANA_SERVICE e.g. dual-agents-grafana
+#   _PROMETHEUS_SERVICE e.g. dual-agents-prometheus
 #   _MONGODB_URI     MongoDB Atlas connection string (use Secret Manager ref)
 #   _OPENAI_API_KEY  OpenAI key (use Secret Manager ref)
 #   _HF_TOKEN        Hugging Face token
-#   _PROMETHEUS_URL  Backend Cloud Run URL, used by Grafana datasource
+#   _PROMETHEUS_URL  Prometheus Cloud Run URL, used by Grafana datasource
 
 substitutions:
   _REGION: us-central1
   _BACKEND_SERVICE: dual-agents-backend
   _GRAFANA_SERVICE: dual-agents-grafana
+  _PROMETHEUS_SERVICE: dual-agents-prometheus
 
 steps:
 
-  # â”€â”€ 1. Build backend image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # â”€â”€ 1. Build backend image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   - name: gcr.io/cloud-builders/docker
     id: build-backend
     args:
@@ -2323,7 +2181,7 @@ steps:
       - .
     waitFor: ['-']
 
-  # â”€â”€ 2. Push backend image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # â”€â”€ 2. Push backend image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   - name: gcr.io/cloud-builders/docker
     id: push-backend
     args:
@@ -2332,7 +2190,7 @@ steps:
       - gcr.io/$PROJECT_ID/$_BACKEND_SERVICE
     waitFor: ['build-backend']
 
-  # â”€â”€ 3. Deploy backend to Cloud Run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # â”€â”€ 3. Deploy backend to Cloud Run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     id: deploy-backend
     entrypoint: gcloud
@@ -2353,7 +2211,49 @@ steps:
       - --update-secrets=OPENAI_API_KEY=openai-api-key:latest,HF_TOKEN=hf-token:latest,MONGODB_URI=mongodb-uri:latest,LANGCHAIN_API_KEY=langchain-api-key:latest
     waitFor: ['push-backend']
 
-  # â”€â”€ 4. Build Grafana image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # â”€â”€ 4. Build Prometheus image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  - name: gcr.io/cloud-builders/docker
+    id: build-prometheus
+    args:
+      - build
+      - -f
+      - deployment/Dockerfile.prometheus
+      - -t
+      - gcr.io/$PROJECT_ID/$_PROMETHEUS_SERVICE:$SHORT_SHA
+      - -t
+      - gcr.io/$PROJECT_ID/$_PROMETHEUS_SERVICE:latest
+      - deployment/
+    waitFor: ['-']
+
+  # â”€â”€ 5. Push Prometheus image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  - name: gcr.io/cloud-builders/docker
+    id: push-prometheus
+    args:
+      - push
+      - --all-tags
+      - gcr.io/$PROJECT_ID/$_PROMETHEUS_SERVICE
+    waitFor: ['build-prometheus']
+
+  # â”€â”€ 6. Deploy Prometheus to Cloud Run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: deploy-prometheus
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - $_PROMETHEUS_SERVICE
+      - --image=gcr.io/$PROJECT_ID/$_PROMETHEUS_SERVICE:$SHORT_SHA
+      - --region=$_REGION
+      - --platform=managed
+      - --allow-unauthenticated
+      - --memory=256Mi
+      - --cpu=1
+      - --min-instances=1
+      - --max-instances=1
+      - --port=9090
+    waitFor: ['push-prometheus']
+
+  # â”€â”€ 7. Build Grafana image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   - name: gcr.io/cloud-builders/docker
     id: build-grafana
     args:
@@ -2367,7 +2267,7 @@ steps:
       - deployment/
     waitFor: ['-']
 
-  # â”€â”€ 5. Push Grafana image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # â”€â”€ 8. Push Grafana image â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   - name: gcr.io/cloud-builders/docker
     id: push-grafana
     args:
@@ -2376,7 +2276,8 @@ steps:
       - gcr.io/$PROJECT_ID/$_GRAFANA_SERVICE
     waitFor: ['build-grafana']
 
-  # â”€â”€ 6. Deploy Grafana to Cloud Run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  # â”€â”€ 9. Deploy Grafana to Cloud Run â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  #    Waits for Prometheus to be deployed so _PROMETHEUS_URL is resolvable.
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
     id: deploy-grafana
     entrypoint: gcloud
@@ -2393,12 +2294,14 @@ steps:
       - --min-instances=0
       - --max-instances=1
       - --port=3000
-      - --set-env-vars=PROMETHEUS_URL=$_PROMETHEUS_URL
-    waitFor: ['push-grafana']
+      - --set-env-vars=GF_AUTH_ANONYMOUS_ENABLED=true,GF_AUTH_ANONYMOUS_ORG_NAME=Main Org.,GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer,GF_SECURITY_DISABLE_INITIAL_ADMIN_CREATION=true,GF_USERS_ALLOW_SIGN_UP=false,PROMETHEUS_URL=$_PROMETHEUS_URL
+    waitFor: ['push-grafana', 'deploy-prometheus']
 
 images:
   - gcr.io/$PROJECT_ID/$_BACKEND_SERVICE:$SHORT_SHA
   - gcr.io/$PROJECT_ID/$_BACKEND_SERVICE:latest
+  - gcr.io/$PROJECT_ID/$_PROMETHEUS_SERVICE:$SHORT_SHA
+  - gcr.io/$PROJECT_ID/$_PROMETHEUS_SERVICE:latest
   - gcr.io/$PROJECT_ID/$_GRAFANA_SERVICE:$SHORT_SHA
   - gcr.io/$PROJECT_ID/$_GRAFANA_SERVICE:latest
 
@@ -2479,6 +2382,16 @@ EXPOSE 3000
 
 # Grafana reads PORT from GF_SERVER_HTTP_PORT
 ENV GF_SERVER_HTTP_PORT=3000
+
+
+================================================
+FILE: deployment/Dockerfile.prometheus
+================================================
+FROM prom/prometheus:v2.54.0
+
+COPY prometheus/prometheus.yml /etc/prometheus/prometheus.yml
+
+EXPOSE 9090
 
 
 ================================================
@@ -2712,26 +2625,14 @@ FILE: deployment/prometheus/prometheus.yml
 ================================================
 global:
   scrape_interval: 15s
-  evaluation_interval: 15s
 
 scrape_configs:
   - job_name: dual-agents-backend
-    # For local docker-compose: target is the backend container name.
-    # For Cloud Run: replace with the backend service URL and add bearer_token_file
-    # or basic_auth if you add auth to /metrics.
     static_configs:
       - targets:
-          - backend:8000   # docker-compose service name
+          - dual-agents-backend-lmzcevoixa-uc.a.run.app
     metrics_path: /metrics
-    scheme: http
-
-  # Uncomment and fill in for Cloud Run scraping via public /metrics endpoint.
-  # - job_name: dual-agents-backend-cloudrun
-  #   static_configs:
-  #     - targets:
-  #         - <backend-service-url>.run.app
-  #   metrics_path: /metrics
-  #   scheme: https
+    scheme: https
 
 
 ================================================
@@ -3412,6 +3313,15 @@ FILE: evals/results/__init__.py
 ================================================
 """Generated evaluation artifacts."""
 
+
+
+
+================================================
+FILE: evals/results/cost_latency_table.csv
+================================================
+model,avg_latency_ms,total_tokens,avg_tokens,estimated_cost_usd
+frontier,2007.233,6238,207.933,0.012476
+oss,38036.633,3617,120.567,0.0
 
 
 

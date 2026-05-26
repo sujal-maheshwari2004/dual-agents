@@ -1,24 +1,21 @@
-# Stateless Grafana — config baked in, no persistent volume needed.
-# Dashboard JSON is provisioned at build time via grafana/dashboard.json.
 FROM grafana/grafana:11.2.0
 
-# Disable auth for public demo; swap to GF_AUTH_ANONYMOUS_ENABLED=false
-# and add GF_SECURITY_ADMIN_* vars for a private deployment.
 ENV GF_AUTH_ANONYMOUS_ENABLED=true \
     GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer \
     GF_SERVER_ROOT_URL=/ \
     GF_SERVER_SERVE_FROM_SUB_PATH=false \
-    GF_LOG_LEVEL=warn
-
-# Prometheus datasource — URL is injected at runtime via Cloud Run env var
-# PROMETHEUS_URL=http://<backend-service>/metrics
-# We write it as a provisioning file using an entrypoint override below.
+    GF_LOG_LEVEL=warn \
+    GF_SERVER_HTTP_PORT=3000
 
 COPY grafana/dashboard.json          /etc/grafana/provisioning/dashboards/dual-agents.json
 COPY grafana/provisioning-ds.yaml    /etc/grafana/provisioning/datasources/prometheus.yaml
 COPY grafana/provisioning-dash.yaml  /etc/grafana/provisioning/dashboards/default.yaml
+COPY grafana/entrypoint.sh           /entrypoint.sh
 
+USER root
+RUN chmod +x /entrypoint.sh
+
+USER grafana
 EXPOSE 3000
 
-# Grafana reads PORT from GF_SERVER_HTTP_PORT
-ENV GF_SERVER_HTTP_PORT=3000
+ENTRYPOINT ["/entrypoint.sh"]
